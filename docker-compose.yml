@@ -31,6 +31,17 @@ services:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
+    entrypoint: 
+      - "/bin/sh"
+      - "-c"
+      - |
+        /bin/ollama serve &
+        until /bin/ollama list >/dev/null 2>&1; do sleep 1; done
+        if ! /bin/ollama list | grep -q "llama3.2:1b"; then
+          echo "Pulling llama3.2:1b model..."
+          /bin/ollama pull llama3.2:1b
+        fi
+        wait
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 10s
@@ -53,7 +64,47 @@ services:
       timeout: 5s
       retries: 5
 
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://k8pilot:k8pilot@postgres:5432/k8pilot
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_URL: http://ollama:11434
+      PROMETHEUS_URL: http://prometheus:9090
+      KUBECONFIG: /root/.kube/config
+    volumes:
+      - ./backend:/app
+      - ./infra/docker/kube-config.yaml:/root/.kube/config:ro
+    networks:
+      - default
+      - minikube
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+
 volumes:
   pgdata:
   ollama_data:
   prometheus_data:
+
+networks:
+  default:
+  minikube:
+    external: true
+    name: K8Pilot

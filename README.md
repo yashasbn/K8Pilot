@@ -55,8 +55,8 @@ make deploy-sample
 To avoid installing Python, Node.js, and other host dependencies directly on your machine, you can run the entire stack inside Docker:
 
 ```powershell
-# 1. Start minikube with a static API port (required for the backend in Docker to connect to it)
-minikube start --profile K8Pilot --cpus 4 --memory 8192 --driver docker --addons metrics-server --apiserver-port=8443
+# 1. Start minikube cluster
+.\run.ps1 cluster-up
 
 # 2. Spin up the entire Docker Compose environment (Database, Redis, Ollama, Prometheus, Backend, Frontend)
 docker compose up -d

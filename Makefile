@@ -6,7 +6,7 @@ help: ## Show this help
 # ─── Local Infrastructure ────────────────────────────────────────────
 
 cluster-up: ## Create minikube cluster
-	minikube start --profile K8Pilot --cpus 4 --memory 8192 --driver docker --addons metrics-server
+	minikube start --profile K8Pilot --driver docker --addons metrics-server
 	@echo "✓ Minikube cluster 'K8Pilot' is ready"
 	@echo "  Run 'make monitoring' to install Prometheus + Grafana"
 

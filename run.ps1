@@ -117,7 +117,7 @@ function Help-Target {
 
 function ClusterUp-Target {
     Write-Header "Starting Minikube Cluster"
-    minikube start --profile K8Pilot --cpus 4 --memory 8192 --driver docker --addons metrics-server --apiserver-port=8443
+    minikube start --profile K8Pilot --driver docker --addons metrics-server --apiserver-port=8443
     Write-Success "Minikube cluster 'K8Pilot' is ready"
     
     Write-Info "Generating Docker-compatible kubeconfig..."
@@ -126,9 +126,11 @@ function ClusterUp-Target {
     }
     
     try {
-        # Flatten kubeconfig (embeds certs) and replace localhost with host.docker.internal
-        (kubectl config view --flatten --raw) -replace "https://127.0.0.1:\d+", "https://host.docker.internal:8443" | Set-Content -Path "infra/docker/kube-config.yaml" -Encoding UTF8
-        Write-Success "Generated Docker-compatible kubeconfig at infra/docker/kube-config.yaml"
+        # Get minikube container IP on its Docker network (avoids host.docker.internal IPv6 issues)
+        $minikubeIP = (minikube ip --profile K8Pilot).Trim()
+        # Flatten kubeconfig (embeds certs) and point to minikube container IP on port 8443
+        (kubectl config view --flatten --raw) -replace "https://127.0.0.1:\d+", "https://${minikubeIP}:8443" | Set-Content -Path "infra/docker/kube-config.yaml" -Encoding UTF8
+        Write-Success "Generated Docker-compatible kubeconfig at infra/docker/kube-config.yaml (API server: ${minikubeIP}:8443)"
     } catch {
         Write-Warning "Failed to generate Docker-compatible kubeconfig automatically. You may need to generate it manually."
     }

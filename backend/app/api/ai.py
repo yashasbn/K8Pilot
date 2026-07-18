@@ -73,13 +73,15 @@ User: {user_message}"""
     action_match = re.search(r'`{2,3}action\s*\n?(.*?)\n?`{2,3}', response_text, re.DOTALL)
     if not action_match:
         # Also try to find a raw JSON action block
-        action_match = re.search(r'\{"action"\s*:\s*"[^"]+?".*?\}', response_text, re.DOTALL)
-        if action_match:
+        raw_json_match = re.search(r'\{"action"\s*:\s*"[^"]+?".*?\}', response_text, re.DOTALL)
+        if raw_json_match:
             # Wrap it so the group(1) logic below works uniformly
             class _FakeMatch:
+                def __init__(self, val):
+                    self.val = val
                 def group(self, n):
-                    return action_match.group(0)
-            action_match = _FakeMatch()
+                    return self.val
+            action_match = _FakeMatch(raw_json_match.group(0))
     if action_match:
         try:
             action_data = json.loads(action_match.group(1).strip())

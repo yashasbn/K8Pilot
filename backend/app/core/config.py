@@ -24,7 +24,7 @@ class Settings(BaseSettings):
 
     # LLM (Ollama)
     ollama_url: str = "http://localhost:11434"
-    ollama_model: str = "llama3"
+    ollama_model: str = "llama3.2:1b"
 
     class Config:
         env_file = ".env"
