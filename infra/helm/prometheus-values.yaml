@@ -1,0 +1,33 @@
+# Minimal values for kube-prometheus-stack in local minikube cluster
+prometheus:
+  service:
+    type: ClusterIP
+  prometheusSpec:
+    retention: 24h
+    resources:
+      requests:
+        memory: 256Mi
+        cpu: 100m
+      limits:
+        memory: 512Mi
+
+grafana:
+  service:
+    type: ClusterIP
+  adminPassword: admin
+
+alertmanager:
+  enabled: false
+
+# Reduce resource usage for local dev
+nodeExporter:
+  resources:
+    requests:
+      memory: 32Mi
+      cpu: 10m
+
+kubeStateMetrics:
+  resources:
+    requests:
+      memory: 32Mi
+      cpu: 10m

@@ -1,0 +1,19 @@
+loki:
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+  auth_enabled: false
+
+singleBinary:
+  replicas: 1
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 50m
+
+promtail:
+  enabled: true
+
+grafana:
+  enabled: false  # Already installed via kube-prometheus-stack
