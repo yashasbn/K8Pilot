@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Header
 from pydantic import BaseModel
 import httpx
 import json
@@ -47,9 +47,19 @@ async def list_models():
                 }
                 for m in data.get("models", [])
             ]
+            # Always append cloud Gemini models
+            models.append({"name": "gemini-1.5-flash", "size": 0, "modified_at": "Google Cloud"})
+            models.append({"name": "gemini-1.5-pro", "size": 0, "modified_at": "Google Cloud"})
             return {"models": models, "default": settings.ollama_model}
     except httpx.HTTPError as e:
-        raise HTTPException(status_code=502, detail=f"Ollama unreachable: {e}")
+        # If Ollama is unreachable, we can still list Gemini models!
+        return {
+            "models": [
+                {"name": "gemini-1.5-flash", "size": 0, "modified_at": "Google Cloud"},
+                {"name": "gemini-1.5-pro", "size": 0, "modified_at": "Google Cloud"},
+            ],
+            "default": "gemini-1.5-flash",
+        }
 
 
 async def _pull_model_task(name: str):
@@ -96,18 +106,18 @@ async def pull_status():
 
 
 @router.post("/analyze")
-async def analyze_incident(req: AnalyzeRequest):
+async def analyze_incident(req: AnalyzeRequest, x_gemini_api_key: str | None = Header(None)):
     """Use LLM to analyze logs/metrics and explain issues."""
     full_prompt = f"""{req.prompt}
 
 Context:
 {req.context}
 """
-    return await _call_ollama(full_prompt, model=req.model)
+    return await _dispatch_llm(full_prompt, model=req.model, api_key=x_gemini_api_key)
 
 
 @router.post("/chat")
-async def smart_chat(req: AnalyzeRequest):
+async def smart_chat(req: AnalyzeRequest, x_gemini_api_key: str | None = Header(None)):
     """AI chat that can understand intent and execute cluster actions."""
     user_message = req.context
 
@@ -143,7 +153,7 @@ Example - if user says "delete the nginx pod":
 
 User: {user_message}"""
 
-    llm_response = await _call_ollama(full_prompt, model=req.model)
+    llm_response = await _dispatch_llm(full_prompt, model=req.model, api_key=x_gemini_api_key)
     response_text = llm_response.get("response", "")
     use_model = llm_response.get("model", settings.ollama_model)
 
@@ -189,17 +199,17 @@ User: {user_message}"""
 
 
 @router.post("/generate-manifest")
-async def generate_manifest(req: GenerateManifestRequest):
+async def generate_manifest(req: GenerateManifestRequest, x_gemini_api_key: str | None = Header(None)):
     """Generate a Kubernetes manifest from a natural language description."""
     prompt = f"""Generate a valid Kubernetes YAML manifest for the following:
 {req.description}
 
 Return ONLY the YAML, no explanations."""
-    return await _call_ollama(prompt, model=req.model)
+    return await _dispatch_llm(prompt, model=req.model, api_key=x_gemini_api_key)
 
 
 @router.post("/cost-recommendation")
-async def cost_recommendation(req: AnalyzeRequest):
+async def cost_recommendation(req: AnalyzeRequest, x_gemini_api_key: str | None = Header(None)):
     """Analyze resource usage and recommend cost optimizations."""
     prompt = f"""You are a Kubernetes cost optimization expert. Analyze the following 
 resource usage data and provide specific recommendations to reduce costs 
@@ -208,7 +218,7 @@ while maintaining reliability.
 {req.context}
 
 Provide recommendations in a structured format with estimated savings."""
-    return await _call_ollama(prompt, model=req.model)
+    return await _dispatch_llm(prompt, model=req.model, api_key=x_gemini_api_key)
 
 
 def _get_cluster_context(req: AnalyzeRequest) -> str:
@@ -333,3 +343,40 @@ async def _call_ollama(prompt: str, model: str | None = None) -> dict:
             return {"response": data.get("response", ""), "model": use_model}
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"Ollama unreachable: {e}")
+
+
+async def _call_gemini(prompt: str, model: str, api_key: str) -> dict:
+    """Call Google Gemini API for LLM completion."""
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            # Format API url using Beta model endpoint
+            resp = await client.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}]
+                },
+                headers={"Content-Type": "application/json"}
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            candidates = data.get("candidates", [])
+            response_text = ""
+            if candidates:
+                parts = candidates[0].get("content", {}).get("parts", [])
+                if parts:
+                    response_text = parts[0].get("text", "")
+            return {"response": response_text, "model": model}
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=f"Gemini API error: {e.response.text}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Gemini API failed: {e}")
+
+
+async def _dispatch_llm(prompt: str, model: str | None = None, api_key: str | None = None) -> dict:
+    """Dispatches request to Gemini if selected, otherwise defaults to Ollama."""
+    use_model = model or settings.ollama_model
+    if use_model.startswith("gemini-"):
+        if not api_key:
+            raise HTTPException(status_code=400, detail="Gemini API Key is missing. Configure it in the UI Settings first.")
+        return await _call_gemini(prompt, use_model, api_key)
+    return await _call_ollama(prompt, use_model)
