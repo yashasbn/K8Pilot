@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    app_name: str = "KubePilot"
+    app_name: str = "K8Pilot"
     debug: bool = True
 
     # Database
