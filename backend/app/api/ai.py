@@ -54,53 +54,45 @@ async def list_models():
 
 @router.get("/gemini-models")
 async def list_gemini_models(x_gemini_api_key: str | None = Header(None)):
-    """Fetch available Gemini models from Google's API dynamically."""
+    """Fetch available Gemini models from Google's API using the provided key."""
     if not x_gemini_api_key:
         raise HTTPException(status_code=400, detail="X-Gemini-API-Key header is required.")
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(
-                f"https://generativelanguage.googleapis.com/v1/models?key={x_gemini_api_key}"
+                f"https://generativelanguage.googleapis.com/v1beta/models?key={x_gemini_api_key}&pageSize=100"
             )
             resp.raise_for_status()
             data = resp.json()
-            # Words that indicate a model is deprecated or unavailable
-            SKIP_KEYWORDS = ["no longer available", "deprecated", "legacy"]
-            # Skip older versioned aliases (e.g. gemini-1.5-flash-001) when the
-            # non-versioned alias exists; also skip embedding/vision-only models
-            SKIP_NAME_PATTERNS = ["-001", "-002", "-003", "embedding", "aqa", "text-bison"]
 
-            raw_models = data.get("models", [])
             models = []
-            for m in raw_models:
+            for m in data.get("models", []):
                 name = m["name"].replace("models/", "")
-                description = m.get("description", "").lower()
-                display = m.get("displayName", name)
                 methods = m.get("supportedGenerationMethods", [])
-
+                # Only include models that actually support chat/content generation
                 if "generateContent" not in methods:
                     continue
-                if any(kw in description for kw in SKIP_KEYWORDS):
-                    continue
-                if any(pat in name for pat in SKIP_NAME_PATTERNS):
-                    continue
-
                 models.append({
                     "name": name,
-                    "displayName": display,
+                    "displayName": m.get("displayName", name),
                     "description": m.get("description", ""),
+                    "inputTokenLimit": m.get("inputTokenLimit", 0),
+                    "outputTokenLimit": m.get("outputTokenLimit", 0),
                 })
 
-            # Sort: flash models first, then pro, then others
+            # Sort: newest/flash first, pro last
             def sort_key(m):
                 n = m["name"]
-                if "flash-lite" in n: return 0
-                if "flash" in n: return 1
-                if "pro" in n: return 2
-                return 3
+                if "2.5" in n and "flash" in n: return 0
+                if "2.0" in n and "flash" in n: return 1
+                if "flash-lite" in n: return 2
+                if "flash" in n: return 3
+                if "2.5" in n and "pro" in n: return 4
+                if "pro" in n: return 5
+                return 6
 
             models.sort(key=sort_key)
-            return {"models": models}
+            return {"models": models, "total": len(models)}
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=e.response.status_code, detail=f"Gemini API error: {e.response.text}")
     except Exception as e:

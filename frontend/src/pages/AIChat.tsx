@@ -18,6 +18,8 @@ interface GeminiModel {
   name: string
   displayName: string
   description: string
+  inputTokenLimit?: number
+  outputTokenLimit?: number
 }
 
 interface RecommendedModel {
@@ -354,7 +356,11 @@ export default function AIChat() {
                     >
                       <div className="flex flex-col">
                         <span className="text-gray-200 font-medium text-xs">{gm.displayName}</span>
-                        <span className="text-gray-500 text-3xs">{gm.description.slice(0, 55)}{gm.description.length > 55 ? '...' : ''}</span>
+                        <span className="text-gray-500 text-3xs">
+                          {gm.inputTokenLimit ? `${(gm.inputTokenLimit / 1000).toFixed(0)}K ctx` : ''}
+                          {gm.inputTokenLimit && gm.description ? ' · ' : ''}
+                          {gm.description.slice(0, 40)}{gm.description.length > 40 ? '...' : ''}
+                        </span>
                       </div>
                       <span className="text-2xs text-blue-400 font-medium bg-blue-500/10 px-1.5 py-0.5 rounded">Cloud</span>
                     </button>
