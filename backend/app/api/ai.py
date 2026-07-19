@@ -68,14 +68,20 @@ async def list_gemini_models(x_gemini_api_key: str | None = Header(None)):
             models = []
             for m in data.get("models", []):
                 name = m["name"].replace("models/", "")
+                description = m.get("description", "")
                 methods = m.get("supportedGenerationMethods", [])
-                # Only include models that actually support chat/content generation
+
+                # Only include models that support chat/content generation
                 if "generateContent" not in methods:
                     continue
+                # Skip models Google marks as unavailable for new users
+                if "no longer available" in description.lower():
+                    continue
+
                 models.append({
                     "name": name,
                     "displayName": m.get("displayName", name),
-                    "description": m.get("description", ""),
+                    "description": description,
                     "inputTokenLimit": m.get("inputTokenLimit", 0),
                     "outputTokenLimit": m.get("outputTokenLimit", 0),
                 })
