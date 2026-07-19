@@ -60,7 +60,7 @@ async def list_gemini_models(x_gemini_api_key: str | None = Header(None)):
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(
-                f"https://generativelanguage.googleapis.com/v1beta/models?key={x_gemini_api_key}"
+                f"https://generativelanguage.googleapis.com/v1/models?key={x_gemini_api_key}"
             )
             resp.raise_for_status()
             data = resp.json()
@@ -370,7 +370,7 @@ async def _call_gemini(prompt: str, model: str, api_key: str) -> dict:
         async with httpx.AsyncClient(timeout=60.0) as client:
             # Format API url using Beta model endpoint
             resp = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
+                f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={api_key}",
                 json={
                     "contents": [{"parts": [{"text": prompt}]}]
                 },
