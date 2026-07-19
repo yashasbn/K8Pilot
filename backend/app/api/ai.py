@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 import httpx
 import json
@@ -12,6 +12,9 @@ from kubernetes.client.exceptions import ApiException
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
+# Simple registry to keep track of model pull states
+active_pulls = set()
+
 
 class AnalyzeRequest(BaseModel):
     context: str  # logs, metrics, or incident description
@@ -22,6 +25,10 @@ class AnalyzeRequest(BaseModel):
 class GenerateManifestRequest(BaseModel):
     description: str  # e.g. "nginx deployment with 3 replicas and 512Mi memory limit"
     model: str | None = None  # optional model override
+
+
+class PullRequest(BaseModel):
+    name: str
 
 
 @router.get("/models")
@@ -43,6 +50,49 @@ async def list_models():
             return {"models": models, "default": settings.ollama_model}
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"Ollama unreachable: {e}")
+
+
+async def _pull_model_task(name: str):
+    """Background task to pull model from Ollama."""
+    active_pulls.add(name)
+    try:
+        async with httpx.AsyncClient(timeout=600.0) as client:
+            resp = await client.post(
+                f"{settings.ollama_url}/api/pull",
+                json={"name": name, "stream": False},
+            )
+            resp.raise_for_status()
+    except Exception as e:
+        print(f"Error pulling model {name}: {e}")
+    finally:
+        active_pulls.discard(name)
+
+
+@router.post("/pull")
+async def pull_model(req: PullRequest, background_tasks: BackgroundTasks):
+    """Start pulling an Ollama model in the background."""
+    if req.name in active_pulls:
+        return {"status": "downloading", "message": f"Model {req.name} is already downloading."}
+    
+    # Check if already installed
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{settings.ollama_url}/api/tags")
+            if resp.status_code == 200:
+                installed = [m["name"] for m in resp.json().get("models", [])]
+                if req.name in installed or f"{req.name}:latest" in installed:
+                    return {"status": "installed", "message": f"Model {req.name} is already installed."}
+    except Exception:
+        pass
+
+    background_tasks.add_task(_pull_model_task, req.name)
+    return {"status": "downloading", "message": f"Started pulling model {req.name}."}
+
+
+@router.get("/pull/status")
+async def pull_status():
+    """Get active model downloads."""
+    return {"downloading": list(active_pulls)}
 
 
 @router.post("/analyze")
