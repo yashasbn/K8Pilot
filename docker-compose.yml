@@ -37,9 +37,9 @@ services:
       - |
         /bin/ollama serve &
         until /bin/ollama list >/dev/null 2>&1; do sleep 1; done
-        if ! /bin/ollama list | grep -q "llama3.2:1b"; then
-          echo "Pulling llama3.2:1b model..."
-          /bin/ollama pull llama3.2:1b
+        if ! /bin/ollama list | grep -q "llama3"; then
+          echo "Pulling llama3 model..."
+          /bin/ollama pull llama3
         fi
         wait
     healthcheck:
