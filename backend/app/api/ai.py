@@ -64,16 +64,42 @@ async def list_gemini_models(x_gemini_api_key: str | None = Header(None)):
             )
             resp.raise_for_status()
             data = resp.json()
-            # Filter to models that support generateContent
-            models = [
-                {
-                    "name": m["name"].replace("models/", ""),  # strip "models/" prefix
-                    "displayName": m.get("displayName", m["name"]),
+            # Words that indicate a model is deprecated or unavailable
+            SKIP_KEYWORDS = ["no longer available", "deprecated", "legacy"]
+            # Skip older versioned aliases (e.g. gemini-1.5-flash-001) when the
+            # non-versioned alias exists; also skip embedding/vision-only models
+            SKIP_NAME_PATTERNS = ["-001", "-002", "-003", "embedding", "aqa", "text-bison"]
+
+            raw_models = data.get("models", [])
+            models = []
+            for m in raw_models:
+                name = m["name"].replace("models/", "")
+                description = m.get("description", "").lower()
+                display = m.get("displayName", name)
+                methods = m.get("supportedGenerationMethods", [])
+
+                if "generateContent" not in methods:
+                    continue
+                if any(kw in description for kw in SKIP_KEYWORDS):
+                    continue
+                if any(pat in name for pat in SKIP_NAME_PATTERNS):
+                    continue
+
+                models.append({
+                    "name": name,
+                    "displayName": display,
                     "description": m.get("description", ""),
-                }
-                for m in data.get("models", [])
-                if "generateContent" in m.get("supportedGenerationMethods", [])
-            ]
+                })
+
+            # Sort: flash models first, then pro, then others
+            def sort_key(m):
+                n = m["name"]
+                if "flash-lite" in n: return 0
+                if "flash" in n: return 1
+                if "pro" in n: return 2
+                return 3
+
+            models.sort(key=sort_key)
             return {"models": models}
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=e.response.status_code, detail=f"Gemini API error: {e.response.text}")
