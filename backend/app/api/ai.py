@@ -200,22 +200,62 @@ User: {user_message}"""
     response_text = llm_response.get("response", "")
     use_model = llm_response.get("model", settings.ollama_model)
 
-    # Check if the LLM wants to execute actions
-    # Find all JSON-like blocks starting with {"action": ...}
+    # ── Action extraction ────────────────────────────────────────────────────
+    # Robust extractor: tracks brace depth to correctly handle manifests with
+    # nested YAML that contains braces/newlines (breaks simple regex).
+    def extract_json_objects(text: str) -> list[str]:
+        """Find all top-level JSON objects that contain an 'action' key."""
+        results = []
+        i = 0
+        while i < len(text):
+            if text[i] == '{':
+                depth = 0
+                in_string = False
+                escape = False
+                start = i
+                for j in range(i, len(text)):
+                    ch = text[j]
+                    if escape:
+                        escape = False
+                        continue
+                    if ch == '\\' and in_string:
+                        escape = True
+                        continue
+                    if ch == '"':
+                        in_string = not in_string
+                        continue
+                    if not in_string:
+                        if ch == '{':
+                            depth += 1
+                        elif ch == '}':
+                            depth -= 1
+                            if depth == 0:
+                                candidate = text[start:j+1]
+                                try:
+                                    parsed = json.loads(candidate)
+                                    if isinstance(parsed, dict) and "action" in parsed:
+                                        results.append(candidate)
+                                except json.JSONDecodeError:
+                                    pass
+                                i = j + 1
+                                break
+                else:
+                    i += 1
+                    continue
+            else:
+                i += 1
+        return results
+
     action_strings = []
-    
-    # 1. First check if there's a ```action block
-    action_blocks = re.findall(r'`{2,3}action\s*\n?(.*?)\n?`{2,3}', response_text, re.DOTALL)
-    if action_blocks:
-        for block in action_blocks:
-            # A block might contain multiple JSONs separated by commas or newlines
-            # Find individual JSON objects in the block
-            matches = re.findall(r'\{"action"\s*:\s*"[^"]+?".*?\}', block, re.DOTALL)
-            action_strings.extend(matches)
-    else:
-        # 2. Check for raw JSON action blocks in the text
-        matches = re.findall(r'\{"action"\s*:\s*"[^"]+?".*?\}', response_text, re.DOTALL)
-        action_strings.extend(matches)
+
+    # 1. Check for ```action, ```json, or ```yaml code fences first
+    code_blocks = re.findall(r'`{2,3}(?:action|json|yaml)?\s*\n?(.*?)\n?`{2,3}', response_text, re.DOTALL)
+    for block in code_blocks:
+        action_strings.extend(extract_json_objects(block))
+
+    # 2. If nothing found in fences, scan the full response text
+    if not action_strings:
+        action_strings = extract_json_objects(response_text)
 
     if action_strings:
         executed_actions = []
