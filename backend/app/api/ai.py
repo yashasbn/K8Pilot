@@ -172,10 +172,11 @@ async def smart_chat(req: AnalyzeRequest, x_gemini_api_key: str | None = Header(
 
 Available actions you can perform (respond with a JSON action block to execute):
 - {{"action": "delete_pod", "name": "<pod-name>", "namespace": "<ns>"}} — Stop/delete a pod
+- {{"action": "delete_namespace", "name": "<namespace>"}} — Delete an entire namespace and all its resources
 - {{"action": "scale", "deployment": "<name>", "namespace": "<ns>", "replicas": <n>}} — Scale a deployment
 - {{"action": "restart", "deployment": "<name>", "namespace": "<ns>"}} — Restart a deployment
 - {{"action": "get_logs", "name": "<pod-name>", "namespace": "<ns>"}} — Fetch pod logs
-- {{"action": "create", "manifest": "<yaml-string>", "namespace": "<ns>"}} — Create/deploy any Kubernetes resource (Deployment, Pod, Service, etc.) using a valid YAML manifest.
+- {{"action": "create", "manifest": "<yaml-string>", "namespace": "<ns>"}} — Create/deploy any Kubernetes resource
 
 CURRENT CLUSTER STATE:
 {cluster_context}
@@ -183,11 +184,10 @@ CURRENT CLUSTER STATE:
 RULES:
 1. If the user asks to perform an action, respond with ONLY a JSON action block wrapped in ```action tags.
 2. If the user asks a question, answer in plain text.
-3. Use the cluster state above to resolve ambiguous references (e.g. "pod 3" = the 3rd pod in the list).
-4. Always confirm what you did after executing.
-5. For the "create" action, ensure the "manifest" field is a single valid JSON string containing the complete YAML.
+3. Use the cluster state above to resolve ambiguous references.
+4. For the "create" action, ensure the "manifest" field is a single valid JSON string containing the complete YAML.
 
-Example - if user says "delete the nginx pod":
+Example:
 ```action
 {{"action": "delete_pod", "name": "nginx-xyz-abc", "namespace": "default"}}
 ```"""
@@ -258,27 +258,31 @@ User: {user_message}"""
         action_strings = extract_json_objects(response_text)
 
     if action_strings:
-        executed_actions = []
-        messages = []
         try:
-            for act_str in action_strings:
-                action_data = json.loads(act_str.strip())
-                result = _execute_action(action_data)
-                executed_actions.append(action_data)
-                messages.append(result.get("message", "Executed successfully."))
-            
+            pending = [json.loads(s.strip()) for s in action_strings]
+        except (json.JSONDecodeError, Exception) as e:
             return {
-                "response": "\n\n".join(messages),
-                "action_executed": executed_actions[0] if len(executed_actions) == 1 else executed_actions,
+                "response": f"I planned some actions but could not parse them: {e}",
                 "model": use_model,
             }
-        except (json.JSONDecodeError, KeyError, Exception) as e:
-            return {
-                "response": f"I tried to execute the actions but encountered an error: {e}\n\nHere's what I was going to do:\n" + "\n".join(action_strings),
-                "model": use_model,
-            }
+        # Return pending actions for user confirmation — NOT auto-executed
+        return {
+            "response": response_text,
+            "pending_actions": pending,
+            "model": use_model,
+        }
 
     return llm_response
+
+
+@router.post("/execute-action")
+async def execute_action_endpoint(req: dict):
+    """Execute a confirmed cluster action. Called after user approves a pending action."""
+    try:
+        result = _execute_action(req)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Action execution failed: {e}")
 
 
 @router.post("/generate-manifest")
@@ -370,6 +374,12 @@ def _execute_action(action_data: dict) -> dict:
         }
         apps.patch_namespaced_deployment(name=deployment, namespace=namespace, body=body)
         return {"status": "success", "message": f"Done! Deployment '{deployment}' is restarting (rollout restart triggered)."}
+
+    elif action == "delete_namespace":
+        name = action_data["name"]
+        v1 = get_k8s_client()
+        v1.delete_namespace(name=name)
+        return {"status": "success", "message": f"Done! Namespace '{name}' and all its resources have been deleted."}
 
     elif action == "get_logs":
         name = action_data["name"]

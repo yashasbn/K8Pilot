@@ -1,11 +1,22 @@
 import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
-import { Send, ChevronDown, Cpu, Download, RefreshCw, Loader, Settings, X, Eye, EyeOff, Sparkles } from 'lucide-react'
+import { Send, ChevronDown, Cpu, Download, RefreshCw, Loader, Settings, X, Eye, EyeOff, Sparkles, ShieldAlert, Check, Trash2, Plus, RotateCcw, FileText, Scale } from 'lucide-react'
 
 interface Message {
   role: 'user' | 'assistant'
   content: string
   model?: string
+  pendingActions?: PendingAction[]
+}
+
+interface PendingAction {
+  action: string
+  name?: string
+  namespace?: string
+  deployment?: string
+  replicas?: number
+  manifest?: string
+  [key: string]: unknown
 }
 
 interface OllamaModel {
@@ -188,13 +199,40 @@ export default function AIChat() {
         prompt: 'You are K8Pilot, an AI Kubernetes operations assistant.',
         model: selectedModel || undefined,
       }, { headers: buildHeaders() })
-      setMessages(prev => [...prev, { role: 'assistant', content: resp.data.response, model: resp.data.model }])
+
+      const assistantMsg: Message = {
+        role: 'assistant',
+        content: resp.data.response || '',
+        model: resp.data.model,
+        pendingActions: resp.data.pending_actions || undefined,
+      }
+      setMessages(prev => [...prev, assistantMsg])
     } catch (err: unknown) {
       let errMsg = 'Error: Could not reach AI service.'
       if (axios.isAxiosError(err) && err.response?.data?.detail) errMsg = `Error: ${err.response.data.detail}`
       setMessages(prev => [...prev, { role: 'assistant', content: errMsg }])
     } finally {
       setLoading(false)
+    }
+  }
+
+  const executeAction = async (msgIndex: number, action: PendingAction, approved: boolean) => {
+    // Remove pending actions from this message regardless of approve/deny
+    setMessages(prev => prev.map((m, i) => i === msgIndex ? { ...m, pendingActions: undefined } : m))
+
+    if (!approved) {
+      setMessages(prev => [...prev, { role: 'assistant', content: `⛔ Action cancelled: \`${action.action}\`` }])
+      return
+    }
+
+    try {
+      const resp = await axios.post('/api/ai/execute-action', action)
+      const status = resp.data.status === 'success' ? '✅' : '⚠️'
+      setMessages(prev => [...prev, { role: 'assistant', content: `${status} ${resp.data.message}` }])
+    } catch (err: unknown) {
+      let errMsg = 'Action failed.'
+      if (axios.isAxiosError(err) && err.response?.data?.detail) errMsg = err.response.data.detail
+      setMessages(prev => [...prev, { role: 'assistant', content: `❌ Error: ${errMsg}` }])
     }
   }
 
@@ -205,6 +243,7 @@ export default function AIChat() {
       fetchPullStatus()
     } catch (e) { console.error('Failed to trigger download', e) }
   }
+
 
   const currentModel = models.find(m => m.name === selectedModel)
   const selectedGemini = geminiModels.find(m => m.name === selectedModel)
@@ -457,17 +496,95 @@ export default function AIChat() {
           <p className="text-gray-500">Ask K8Pilot about your cluster, incidents, or for help generating manifests.</p>
         )}
         {messages.map((msg, i) => (
-          <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[70%] rounded-lg px-4 py-2 text-sm whitespace-pre-wrap ${
-              msg.role === 'user' ? 'bg-blue-600' : 'bg-gray-800 border border-gray-700'
-            }`}>
-              {msg.content}
-              {msg.model && msg.role === 'assistant' && (
-                <div className="mt-1 pt-1 border-t border-gray-700 text-xs text-gray-500 flex items-center gap-1">
-                  {msg.model.startsWith('gemini-') ? <Sparkles size={10} /> : <Cpu size={10} />} {msg.model}
-                </div>
-              )}
+          <div key={i} className="flex flex-col gap-2">
+            <div className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[70%] rounded-lg px-4 py-2 text-sm whitespace-pre-wrap ${
+                msg.role === 'user' ? 'bg-blue-600' : 'bg-gray-800 border border-gray-700'
+              }`}>
+                {msg.content}
+                {msg.model && msg.role === 'assistant' && (
+                  <div className="mt-1 pt-1 border-t border-gray-700 text-xs text-gray-500 flex items-center gap-1">
+                    {msg.model.startsWith('gemini-') ? <Sparkles size={10} /> : <Cpu size={10} />} {msg.model}
+                  </div>
+                )}
+              </div>
             </div>
+
+            {/* Pending actions confirmation card */}
+            {msg.role === 'assistant' && msg.pendingActions && msg.pendingActions.length > 0 && (
+              <div className="flex justify-start">
+                <div className="max-w-[80%] bg-gray-900 border border-gray-700 rounded-xl p-4 space-y-4 shadow-xl">
+                  <div className="flex items-center gap-2 text-amber-400 font-semibold text-xs uppercase tracking-wider">
+                    <ShieldAlert size={16} />
+                    <span>Cluster Authorization Required</span>
+                  </div>
+
+                  <div className="space-y-3">
+                    {msg.pendingActions.map((act, actIdx) => {
+                      const isDestructive = ['delete_pod', 'delete_namespace'].includes(act.action) || 
+                                           (act.action === 'scale' && act.replicas === 0);
+                      
+                      let ActionIcon = ShieldAlert;
+                      if (act.action === 'create') ActionIcon = Plus;
+                      else if (act.action === 'delete_pod' || act.action === 'delete_namespace') ActionIcon = Trash2;
+                      else if (act.action === 'restart') ActionIcon = RotateCcw;
+                      else if (act.action === 'scale') ActionIcon = Scale;
+                      else if (act.action === 'get_logs') ActionIcon = FileText;
+
+                      return (
+                        <div key={actIdx} className={`p-3 rounded-lg border text-sm ${
+                          isDestructive 
+                            ? 'bg-red-950/20 border-red-500/30 text-red-200' 
+                            : 'bg-gray-800/40 border-gray-750 text-gray-300'
+                        }`}>
+                          <div className="flex items-start gap-2.5">
+                            <ActionIcon size={16} className={`mt-0.5 ${isDestructive ? 'text-red-400' : 'text-blue-400'}`} />
+                            <div className="flex-1 space-y-1">
+                              <span className="font-bold text-xs uppercase tracking-wider">
+                                {act.action.replace('_', ' ')}
+                              </span>
+                              <div className="text-xs font-mono space-y-0.5 text-gray-400">
+                                {act.namespace && <div><strong>Namespace:</strong> {act.namespace}</div>}
+                                {act.name && <div><strong>Name:</strong> {act.name}</div>}
+                                {act.deployment && <div><strong>Deployment:</strong> {act.deployment}</div>}
+                                {act.replicas !== undefined && <div><strong>Replicas:</strong> {act.replicas}</div>}
+                                {act.manifest && (
+                                  <details className="mt-1 cursor-pointer">
+                                    <summary className="text-2xs text-blue-400 hover:underline">View YAML Manifest</summary>
+                                    <pre className="mt-1.5 p-2 bg-gray-950 rounded text-3xs overflow-x-auto whitespace-pre font-mono text-gray-300 border border-gray-800">
+                                      {act.manifest}
+                                    </pre>
+                                  </details>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex justify-end gap-2 mt-4">
+                            <button
+                              onClick={() => executeAction(i, act, false)}
+                              className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white rounded-lg text-xs font-medium transition"
+                            >
+                              Deny
+                            </button>
+                            <button
+                              onClick={() => executeAction(i, act, true)}
+                              className={`px-3 py-1.5 flex items-center gap-1 text-xs font-medium rounded-lg text-white transition ${
+                                isDestructive 
+                                  ? 'bg-red-650 hover:bg-red-750 shadow-lg shadow-red-900/20' 
+                                  : 'bg-blue-600 hover:bg-blue-700 shadow-lg shadow-blue-900/20'
+                              }`}
+                            >
+                              <Check size={12} /> Confirm & Run
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         ))}
         {loading && (
