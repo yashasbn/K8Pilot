@@ -97,31 +97,41 @@ User: {user_message}"""
     response_text = llm_response.get("response", "")
     use_model = llm_response.get("model", settings.ollama_model)
 
-    # Check if the LLM wants to execute an action
-    action_match = re.search(r'`{2,3}action\s*\n?(.*?)\n?`{2,3}', response_text, re.DOTALL)
-    if not action_match:
-        # Also try to find a raw JSON action block
-        raw_json_match = re.search(r'\{"action"\s*:\s*"[^"]+?".*?\}', response_text, re.DOTALL)
-        if raw_json_match:
-            # Wrap it so the group(1) logic below works uniformly
-            class _FakeMatch:
-                def __init__(self, val):
-                    self.val = val
-                def group(self, n):
-                    return self.val
-            action_match = _FakeMatch(raw_json_match.group(0))
-    if action_match:
+    # Check if the LLM wants to execute actions
+    # Find all JSON-like blocks starting with {"action": ...}
+    action_strings = []
+    
+    # 1. First check if there's a ```action block
+    action_blocks = re.findall(r'`{2,3}action\s*\n?(.*?)\n?`{2,3}', response_text, re.DOTALL)
+    if action_blocks:
+        for block in action_blocks:
+            # A block might contain multiple JSONs separated by commas or newlines
+            # Find individual JSON objects in the block
+            matches = re.findall(r'\{"action"\s*:\s*"[^"]+?".*?\}', block, re.DOTALL)
+            action_strings.extend(matches)
+    else:
+        # 2. Check for raw JSON action blocks in the text
+        matches = re.findall(r'\{"action"\s*:\s*"[^"]+?".*?\}', response_text, re.DOTALL)
+        action_strings.extend(matches)
+
+    if action_strings:
+        executed_actions = []
+        messages = []
         try:
-            action_data = json.loads(action_match.group(1).strip())
-            result = _execute_action(action_data)
+            for act_str in action_strings:
+                action_data = json.loads(act_str.strip())
+                result = _execute_action(action_data)
+                executed_actions.append(action_data)
+                messages.append(result.get("message", "Executed successfully."))
+            
             return {
-                "response": result["message"],
-                "action_executed": action_data,
+                "response": "\n\n".join(messages),
+                "action_executed": executed_actions[0] if len(executed_actions) == 1 else executed_actions,
                 "model": use_model,
             }
         except (json.JSONDecodeError, KeyError, Exception) as e:
             return {
-                "response": f"I tried to execute an action but encountered an error: {e}\n\nHere's what I was going to do:\n{action_match.group(1)}",
+                "response": f"I tried to execute the actions but encountered an error: {e}\n\nHere's what I was going to do:\n" + "\n".join(action_strings),
                 "model": use_model,
             }
 
