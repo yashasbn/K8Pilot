@@ -60,12 +60,16 @@ def list_namespaces():
 
 @router.get("/pods")
 def list_pods(namespace: str = "default"):
-    """List pods in a namespace with status."""
+    """List pods in a namespace (or all namespaces if '_all')."""
     if not is_k8s_available():
         return {"pods": [], "cluster_connected": False}
     try:
         v1 = get_k8s_client()
-        pods = v1.list_namespaced_pod(namespace=namespace)
+        if namespace == "_all":
+            pods = v1.list_pod_for_all_namespaces()
+        else:
+            pods = v1.list_namespaced_pod(namespace=namespace)
+        
         result = []
         for pod in pods.items:
             result.append({
@@ -86,16 +90,21 @@ def list_pods(namespace: str = "default"):
 
 @router.get("/deployments")
 def list_deployments(namespace: str = "default"):
-    """List deployments in a namespace."""
+    """List deployments in a namespace (or all namespaces if '_all')."""
     if not is_k8s_available():
         return {"deployments": [], "cluster_connected": False}
     try:
         apps = get_apps_client()
-        deps = apps.list_namespaced_deployment(namespace=namespace)
+        if namespace == "_all":
+            deps = apps.list_deployment_for_all_namespaces()
+        else:
+            deps = apps.list_namespaced_deployment(namespace=namespace)
+            
         result = []
         for d in deps.items:
             result.append({
                 "name": d.metadata.name,
+                "namespace": d.metadata.namespace,
                 "replicas": d.spec.replicas,
                 "available": d.status.available_replicas or 0,
                 "ready": d.status.ready_replicas or 0,
