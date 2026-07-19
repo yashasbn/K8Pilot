@@ -14,19 +14,17 @@ interface OllamaModel {
   modified_at: string
 }
 
+interface GeminiModel {
+  name: string
+  displayName: string
+  description: string
+}
+
 interface RecommendedModel {
   name: string
   label: string
   size: string
 }
-
-const GEMINI_MODELS = [
-  { name: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash', desc: 'Fastest, great for ops tasks' },
-  { name: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash Lite', desc: 'Ultra-fast, lightweight' },
-  { name: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash', desc: 'Balanced speed & quality' },
-  { name: 'gemini-1.5-flash-8b', label: 'Gemini 1.5 Flash 8B', desc: 'Small, efficient' },
-  { name: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro', desc: 'Most capable' },
-]
 
 const RECOMMENDED_MODELS: RecommendedModel[] = [
   { name: 'llama3.2:1b', label: 'Llama 3.2 (1B)', size: '1.3 GB' },
@@ -72,6 +70,9 @@ export default function AIChat() {
   const [modelsLoading, setModelsLoading] = useState(true)
   const [downloadingModels, setDownloadingModels] = useState<string[]>([])
 
+  const [geminiModels, setGeminiModels] = useState<GeminiModel[]>([])
+  const [geminiModelsLoading, setGeminiModelsLoading] = useState(false)
+
   const [geminiApiKey, setGeminiApiKey] = useState<string>(() => localStorage.getItem(GEMINI_API_KEY_STORAGE) || '')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [apiKeyInput, setApiKeyInput] = useState('')
@@ -107,7 +108,25 @@ export default function AIChat() {
     }
   }
 
-  useEffect(() => { fetchModels() }, [])
+  const fetchGeminiModels = async (key: string) => {
+    if (!key) { setGeminiModels([]); return }
+    setGeminiModelsLoading(true)
+    try {
+      const resp = await axios.get('/api/ai/gemini-models', {
+        headers: { 'X-Gemini-API-Key': key }
+      })
+      setGeminiModels(resp.data.models || [])
+    } catch {
+      setGeminiModels([])
+    } finally {
+      setGeminiModelsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchModels()
+    if (geminiApiKey) fetchGeminiModels(geminiApiKey)
+  }, [])
 
   useEffect(() => {
     fetchPullStatus()
@@ -137,6 +156,7 @@ export default function AIChat() {
     setGeminiApiKey(trimmed)
     trimmed ? localStorage.setItem(GEMINI_API_KEY_STORAGE, trimmed) : localStorage.removeItem(GEMINI_API_KEY_STORAGE)
     setSettingsOpen(false)
+    fetchGeminiModels(trimmed)
   }
 
   const clearGeminiKey = () => {
@@ -185,7 +205,7 @@ export default function AIChat() {
   }
 
   const currentModel = models.find(m => m.name === selectedModel)
-  const selectedGemini = GEMINI_MODELS.find(m => m.name === selectedModel)
+  const selectedGemini = geminiModels.find(m => m.name === selectedModel)
 
   return (
     <div className="flex flex-col h-full">
@@ -414,7 +434,7 @@ export default function AIChat() {
       {selectedGemini && geminiApiKey && (
         <div className="mb-3 flex items-center gap-2 text-xs text-blue-400 bg-blue-500/5 border border-blue-500/20 rounded-lg px-3 py-1.5">
           <Sparkles size={12} />
-          <span>Using <strong>{selectedGemini.label}</strong> via Gemini Cloud API</span>
+          <span>Using <strong>{selectedGemini.displayName}</strong> via Gemini Cloud API</span>
         </div>
       )}
 
@@ -470,3 +490,4 @@ export default function AIChat() {
     </div>
   )
 }
+

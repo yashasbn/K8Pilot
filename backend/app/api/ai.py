@@ -33,7 +33,7 @@ class PullRequest(BaseModel):
 
 @router.get("/models")
 async def list_models():
-    """List available LLM models from Ollama."""
+    """List available LLM models from Ollama (local only)."""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(f"{settings.ollama_url}/api/tags")
@@ -47,19 +47,38 @@ async def list_models():
                 }
                 for m in data.get("models", [])
             ]
-            # Always append cloud Gemini models
-            models.append({"name": "gemini-1.5-flash", "size": 0, "modified_at": "Google Cloud"})
-            models.append({"name": "gemini-1.5-pro", "size": 0, "modified_at": "Google Cloud"})
             return {"models": models, "default": settings.ollama_model}
-    except httpx.HTTPError as e:
-        # If Ollama is unreachable, we can still list Gemini models!
-        return {
-            "models": [
-                {"name": "gemini-1.5-flash", "size": 0, "modified_at": "Google Cloud"},
-                {"name": "gemini-1.5-pro", "size": 0, "modified_at": "Google Cloud"},
-            ],
-            "default": "gemini-1.5-flash",
-        }
+    except httpx.HTTPError:
+        return {"models": [], "default": settings.ollama_model}
+
+
+@router.get("/gemini-models")
+async def list_gemini_models(x_gemini_api_key: str | None = Header(None)):
+    """Fetch available Gemini models from Google's API dynamically."""
+    if not x_gemini_api_key:
+        raise HTTPException(status_code=400, detail="X-Gemini-API-Key header is required.")
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"https://generativelanguage.googleapis.com/v1beta/models?key={x_gemini_api_key}"
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            # Filter to models that support generateContent
+            models = [
+                {
+                    "name": m["name"].replace("models/", ""),  # strip "models/" prefix
+                    "displayName": m.get("displayName", m["name"]),
+                    "description": m.get("description", ""),
+                }
+                for m in data.get("models", [])
+                if "generateContent" in m.get("supportedGenerationMethods", [])
+            ]
+            return {"models": models}
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=f"Gemini API error: {e.response.text}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch Gemini models: {e}")
 
 
 async def _pull_model_task(name: str):
