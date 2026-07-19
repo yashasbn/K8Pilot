@@ -2,6 +2,19 @@
 
 Your AI DevOps Engineer. Connect a Kubernetes cluster and get AI-powered monitoring, incident analysis, cost optimization, and auto-healing.
 
+## Disk Space & Resource Requirements
+
+Running the full K8Pilot stack locally requires a minimum amount of disk space and system resources to accommodate Docker images, local AI models, and the local Kubernetes cluster:
+
+- **Disk Space**: **~15 GB to 25 GB** of free space is highly recommended:
+  - **Docker Images & Databases**: ~5 GB (Backend, Frontend, Postgres, Redis, Prometheus).
+  - **Local AI Models (Ollama)**: ~2 GB to 10 GB depending on the model (e.g. `llama3` is 4.7 GB, `gemma2:2b` is 1.6 GB).
+  - **Minikube VM / Storage**: ~5 GB for cluster state, caches, and sample container workloads.
+- **RAM**: **Minimum 16 GB** (with 8 GB allocated to Minikube).
+- **CPU**: **4+ Cores** (recommended for running local Ollama inference efficiently).
+
+---
+
 ## Prerequisites
 
 ### macOS/Linux
