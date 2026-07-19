@@ -52,21 +52,51 @@ make deploy-sample
 
 ### Windows (Docker Compose - Recommended)
 
-To avoid installing Python, Node.js, and other host dependencies directly on your machine, you can run the entire stack inside Docker:
+To avoid installing Python, Node.js, and other host dependencies directly on your machine, you can run the entire stack inside Docker.
+
+#### Docker Desktop DNS Configuration (Required)
+
+Before first run, configure Docker Desktop to use public DNS servers to avoid image pull failures:
+
+1. Open **Docker Desktop → Settings → Docker Engine**
+2. Add the `dns` field to the JSON config:
+   ```json
+   {
+     "builder": {
+       "gc": {
+         "defaultKeepStorage": "20GB",
+         "enabled": true
+       }
+     },
+     "experimental": false,
+     "dns": [
+       "8.8.8.8",
+       "8.8.4.4"
+     ]
+   }
+   ```
+3. Click **Apply & Restart**
+
+#### Launch Everything
+
+A single command starts Minikube, all Docker services, and connects the backend to the cluster:
 
 ```powershell
-# 1. Start minikube cluster
-.\run.ps1 cluster-up
-
-# 2. Spin up the entire Docker Compose environment (Database, Redis, Ollama, Prometheus, Backend, Frontend)
-docker compose up -d
+.\run.ps1 dev
 ```
 
-Your app will be fully built and started. The first startup will automatically download the `llama3` model inside the Ollama container, which may take a few minutes.
+This will:
+1. Start a Minikube cluster (`K8Pilot` profile) with the Docker driver
+2. Generate a container-compatible kubeconfig at `infra/docker/kube-config.yaml`
+3. Build & start all Docker Compose services (Postgres, Redis, Ollama, Prometheus, Backend, Frontend)
+4. Connect the backend container to the Minikube Docker network
 
-If you want to run sample workloads to verify the UI monitoring, run:
+The first startup will automatically download the `llama3.2:1b` AI model (~1.3 GB) inside the Ollama container, which may take a few minutes.
+
+#### Deploy Sample Workloads
+
 ```powershell
-kubectl create deployment nginx-test --image=nginx:alpine --replicas=3
+.\run.ps1 deploy-sample
 ```
 
 ## Access Points

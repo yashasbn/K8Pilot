@@ -227,19 +227,40 @@ function Frontend-Target {
 
 function Dev-Target {
     Write-Header "Launching Full Dev Environment"
-    # Ensure infra is up first
-    InfraUp-Target
-    
-    Write-Host "`nStarting backend and frontend in separate console windows..." -ForegroundColor Yellow
-    
-    # Construct script commands using direct virtualenv execution
-    $backendCmd = "Push-Location backend; if (-not (Test-Path .venv)) { Write-Host 'Creating virtual environment...'; python -m venv .venv }; Write-Host 'Installing dependencies...'; & .venv\Scripts\python.exe -m pip install -r requirements.txt; Write-Host 'Starting backend...'; & .venv\Scripts\uvicorn.exe app.main:app --reload --port 8000"
-    $frontendCmd = "Push-Location frontend; Write-Host 'Installing dependencies...'; npm install; Write-Host 'Starting frontend...'; npm run dev"
-    
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", $backendCmd
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", $frontendCmd
-    
-    Write-Success "Full development environment started! Check the spawned PowerShell windows."
+
+    # ── Phase 1: Minikube Cluster ──────────────────────────────────────
+    Write-Info "Phase 1/3: Starting Minikube cluster..."
+    ClusterUp-Target
+
+    # ── Phase 2: Docker Compose ────────────────────────────────────────
+    Write-Info "Phase 2/3: Starting Docker Compose services..."
+    docker compose up -d --build
+    Write-Success "Docker Compose services started"
+
+    # ── Phase 3: Connect backend to Minikube network ───────────────────
+    Write-Info "Phase 3/3: Connecting backend container to Minikube network..."
+    $minikubeNetwork = "K8Pilot"
+    $backendContainer = (docker compose ps -q backend 2>$null)
+    if ($backendContainer) {
+        try {
+            docker network connect $minikubeNetwork $backendContainer 2>$null
+            Write-Success "Backend container connected to '$minikubeNetwork' network"
+        } catch {
+            Write-Warning "Could not connect backend to minikube network (may already be connected)"
+        }
+    } else {
+        Write-Warning "Backend container not found. You may need to run 'docker compose up -d' again."
+    }
+
+    Write-Host ""
+    Write-Success "Full development environment is ready!"
+    Write-Host "  Frontend:   http://localhost:5173" -ForegroundColor Cyan
+    Write-Host "  Backend:    http://localhost:8000" -ForegroundColor Cyan
+    Write-Host "  API Docs:   http://localhost:8000/docs" -ForegroundColor Cyan
+    Write-Host "  Prometheus: http://localhost:9090" -ForegroundColor Cyan
+    Write-Host "  Ollama:     http://localhost:11434" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "Run '.\run.ps1 deploy-sample' to deploy sample workloads." -ForegroundColor Yellow
 }
 
 function DeploySample-Target {

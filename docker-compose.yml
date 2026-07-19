@@ -77,9 +77,6 @@ services:
     volumes:
       - ./backend:/app
       - ./infra/docker/kube-config.yaml:/root/.kube/config:ro
-    networks:
-      - default
-      - minikube
     depends_on:
       postgres:
         condition: service_healthy
@@ -102,9 +99,3 @@ volumes:
   pgdata:
   ollama_data:
   prometheus_data:
-
-networks:
-  default:
-  minikube:
-    external: true
-    name: K8Pilot
