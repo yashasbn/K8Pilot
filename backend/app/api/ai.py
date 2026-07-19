@@ -3,9 +3,11 @@ from pydantic import BaseModel
 import httpx
 import json
 import re
+import yaml
 
 from app.core.config import settings
 from app.core.kubernetes import get_k8s_client, get_apps_client
+from kubernetes import utils
 from kubernetes.client.exceptions import ApiException
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -14,10 +16,33 @@ router = APIRouter(prefix="/ai", tags=["ai"])
 class AnalyzeRequest(BaseModel):
     context: str  # logs, metrics, or incident description
     prompt: str = "Explain this Kubernetes issue in plain English and suggest a fix."
+    model: str | None = None  # optional model override
 
 
 class GenerateManifestRequest(BaseModel):
     description: str  # e.g. "nginx deployment with 3 replicas and 512Mi memory limit"
+    model: str | None = None  # optional model override
+
+
+@router.get("/models")
+async def list_models():
+    """List available LLM models from Ollama."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{settings.ollama_url}/api/tags")
+            resp.raise_for_status()
+            data = resp.json()
+            models = [
+                {
+                    "name": m["name"],
+                    "size": m.get("size", 0),
+                    "modified_at": m.get("modified_at", ""),
+                }
+                for m in data.get("models", [])
+            ]
+            return {"models": models, "default": settings.ollama_model}
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Ollama unreachable: {e}")
 
 
 @router.post("/analyze")
@@ -28,7 +53,7 @@ async def analyze_incident(req: AnalyzeRequest):
 Context:
 {req.context}
 """
-    return await _call_ollama(full_prompt)
+    return await _call_ollama(full_prompt, model=req.model)
 
 
 @router.post("/chat")
@@ -40,13 +65,14 @@ async def smart_chat(req: AnalyzeRequest):
     cluster_context = _get_cluster_context(req)
 
     # Ask the LLM to decide: answer or act
-    system_prompt = f"""You are KubePilot, an AI Kubernetes operations assistant. You can EXECUTE actions on the cluster, not just explain them.
+    system_prompt = f"""You are K8Pilot, an AI Kubernetes operations assistant. You can EXECUTE actions on the cluster, not just explain them.
 
 Available actions you can perform (respond with a JSON action block to execute):
 - {{"action": "delete_pod", "name": "<pod-name>", "namespace": "<ns>"}} — Stop/delete a pod
 - {{"action": "scale", "deployment": "<name>", "namespace": "<ns>", "replicas": <n>}} — Scale a deployment
 - {{"action": "restart", "deployment": "<name>", "namespace": "<ns>"}} — Restart a deployment
 - {{"action": "get_logs", "name": "<pod-name>", "namespace": "<ns>"}} — Fetch pod logs
+- {{"action": "create", "manifest": "<yaml-string>", "namespace": "<ns>"}} — Create/deploy any Kubernetes resource (Deployment, Pod, Service, etc.) using a valid YAML manifest.
 
 CURRENT CLUSTER STATE:
 {cluster_context}
@@ -56,6 +82,7 @@ RULES:
 2. If the user asks a question, answer in plain text.
 3. Use the cluster state above to resolve ambiguous references (e.g. "pod 3" = the 3rd pod in the list).
 4. Always confirm what you did after executing.
+5. For the "create" action, ensure the "manifest" field is a single valid JSON string containing the complete YAML.
 
 Example - if user says "delete the nginx pod":
 ```action
@@ -66,8 +93,9 @@ Example - if user says "delete the nginx pod":
 
 User: {user_message}"""
 
-    llm_response = await _call_ollama(full_prompt)
+    llm_response = await _call_ollama(full_prompt, model=req.model)
     response_text = llm_response.get("response", "")
+    use_model = llm_response.get("model", settings.ollama_model)
 
     # Check if the LLM wants to execute an action
     action_match = re.search(r'`{2,3}action\s*\n?(.*?)\n?`{2,3}', response_text, re.DOTALL)
@@ -89,12 +117,12 @@ User: {user_message}"""
             return {
                 "response": result["message"],
                 "action_executed": action_data,
-                "model": settings.ollama_model,
+                "model": use_model,
             }
         except (json.JSONDecodeError, KeyError, Exception) as e:
             return {
                 "response": f"I tried to execute an action but encountered an error: {e}\n\nHere's what I was going to do:\n{action_match.group(1)}",
-                "model": settings.ollama_model,
+                "model": use_model,
             }
 
     return llm_response
@@ -107,7 +135,7 @@ async def generate_manifest(req: GenerateManifestRequest):
 {req.description}
 
 Return ONLY the YAML, no explanations."""
-    return await _call_ollama(prompt)
+    return await _call_ollama(prompt, model=req.model)
 
 
 @router.post("/cost-recommendation")
@@ -120,7 +148,7 @@ while maintaining reliability.
 {req.context}
 
 Provide recommendations in a structured format with estimated savings."""
-    return await _call_ollama(prompt)
+    return await _call_ollama(prompt, model=req.model)
 
 
 def _get_cluster_context(req: AnalyzeRequest) -> str:
@@ -196,24 +224,52 @@ def _execute_action(action_data: dict) -> dict:
         logs = v1.read_namespaced_pod_log(name=name, namespace=namespace, tail_lines=50)
         return {"status": "success", "message": f"Logs from pod '{name}':\n\n```\n{logs}\n```"}
 
+    elif action == "create":
+        manifest_str = action_data["manifest"]
+        # Use K8s client config to build a helper API client
+        from kubernetes.client import ApiClient
+        k8s_client = ApiClient()
+        
+        # Parse the YAML manifest(s)
+        try:
+            yaml_dicts = list(yaml.safe_load_all(manifest_str))
+        except Exception as e:
+            return {"status": "error", "message": f"Failed to parse manifest YAML: {e}"}
+
+        created_objs = []
+        for obj in yaml_dicts:
+            if not obj:
+                continue
+            # Force target namespace if specified
+            if "metadata" in obj:
+                obj["metadata"]["namespace"] = namespace
+            
+            utils.create_from_dict(k8s_client, obj)
+            kind = obj.get("kind", "Resource")
+            name = obj.get("metadata", {}).get("name", "unnamed")
+            created_objs.append(f"{kind} '{name}'")
+
+        return {"status": "success", "message": f"Done! Successfully created resource(s) in namespace '{namespace}': {', '.join(created_objs)}"}
+
     else:
         return {"status": "error", "message": f"Unknown action: {action}"}
 
 
-async def _call_ollama(prompt: str) -> dict:
+async def _call_ollama(prompt: str, model: str | None = None) -> dict:
     """Call Ollama API for LLM completion."""
+    use_model = model or settings.ollama_model
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
                 f"{settings.ollama_url}/api/generate",
                 json={
-                    "model": settings.ollama_model,
+                    "model": use_model,
                     "prompt": prompt,
                     "stream": False,
                 },
             )
             resp.raise_for_status()
             data = resp.json()
-            return {"response": data.get("response", ""), "model": settings.ollama_model}
+            return {"response": data.get("response", ""), "model": use_model}
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"Ollama unreachable: {e}")
