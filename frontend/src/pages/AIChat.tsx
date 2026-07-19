@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 import { Send, ChevronDown, Cpu, Download, RefreshCw, Loader, Settings, X, Eye, EyeOff, Sparkles } from 'lucide-react'
 
@@ -330,24 +330,31 @@ export default function AIChat() {
                   </span>
                   {!geminiApiKey && (
                     <div className="mx-2 my-1 px-3 py-2 rounded-lg bg-amber-500/5 border border-amber-500/20 text-xs text-amber-400">
-                      Set your Gemini API key in Settings to use these models.
+                      Set your Gemini API key in ⚙️ Settings to use these models.
                     </div>
                   )}
-                  {GEMINI_MODELS.map(gm => (
+                  {geminiModelsLoading && (
+                    <div className="px-3 py-2 text-xs text-gray-400 flex items-center gap-2">
+                      <Loader size={12} className="animate-spin" /> Fetching models from Google...
+                    </div>
+                  )}
+                  {!geminiModelsLoading && geminiApiKey && geminiModels.length === 0 && (
+                    <div className="px-3 py-2 text-xs text-amber-400">No generateContent models found. Check your API key.</div>
+                  )}
+                  {geminiModels.map(gm => (
                     <button
                       key={gm.name}
                       onClick={() => {
                         setSelectedModel(gm.name)
                         setModelDropdownOpen(false)
-                        if (!geminiApiKey) setTimeout(() => setSettingsOpen(true), 100)
                       }}
                       className={`w-full text-left px-3 py-2.5 my-0.5 rounded-lg text-sm hover:bg-gray-700/60 transition-all flex items-center justify-between ${
                         selectedModel === gm.name ? 'bg-blue-600/10 border-l-2 border-blue-500' : ''
                       }`}
                     >
                       <div className="flex flex-col">
-                        <span className="text-gray-200 font-medium text-xs">{gm.label}</span>
-                        <span className="text-gray-500 text-3xs">{gm.desc}</span>
+                        <span className="text-gray-200 font-medium text-xs">{gm.displayName}</span>
+                        <span className="text-gray-500 text-3xs">{gm.description.slice(0, 55)}{gm.description.length > 55 ? '...' : ''}</span>
                       </div>
                       <span className="text-2xs text-blue-400 font-medium bg-blue-500/10 px-1.5 py-0.5 rounded">Cloud</span>
                     </button>
