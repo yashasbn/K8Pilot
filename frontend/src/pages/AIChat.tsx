@@ -21,10 +21,16 @@ interface RecommendedModel {
 }
 
 const RECOMMENDED_MODELS: RecommendedModel[] = [
-  { name: 'llama3', label: 'Llama 3 (8B)', size: '4.7 GB' },
+  { name: 'llama3.2:1b', label: 'Llama 3.2 (1B)', size: '1.3 GB' },
   { name: 'llama3.2', label: 'Llama 3.2 (3B)', size: '2.0 GB' },
+  { name: 'llama3', label: 'Llama 3 (8B)', size: '4.7 GB' },
+  { name: 'qwen2.5:1.5b', label: 'Qwen 2.5 (1.5B)', size: '986 MB' },
   { name: 'qwen2.5:3b', label: 'Qwen 2.5 (3B)', size: '2.0 GB' },
+  { name: 'qwen2.5:7b', label: 'Qwen 2.5 (7B)', size: '4.7 GB' },
   { name: 'gemma2:2b', label: 'Gemma 2 (2.6B)', size: '1.6 GB' },
+  { name: 'gemma2:9b', label: 'Gemma 2 (9B)', size: '5.5 GB' },
+  { name: 'mistral', label: 'Mistral (7B)', size: '4.1 GB' },
+  { name: 'phi3', label: 'Phi 3 (3.8B)', size: '2.2 GB' },
 ]
 
 function formatSize(bytes: number): string {
@@ -172,7 +178,7 @@ export default function AIChat() {
           </button>
 
           {modelDropdownOpen && (
-            <div className="absolute right-0 top-full mt-2 w-80 bg-gray-850 border border-gray-700 rounded-xl shadow-2xl z-50 overflow-hidden divide-y divide-gray-700 backdrop-blur-md">
+            <div className="absolute right-0 top-full mt-2 w-80 max-h-[70vh] overflow-y-auto bg-gray-850 border border-gray-700 rounded-xl shadow-2xl z-50 divide-y divide-gray-700 backdrop-blur-md">
               {/* Active downloading indicators */}
               {downloadingModels.length > 0 && (
                 <div className="px-4 py-2 bg-blue-900/20 text-xs text-blue-300 flex items-center gap-2">
