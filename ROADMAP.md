@@ -138,22 +138,27 @@ main
 
 ---
 
-## Standard Workflow for Each Phase
+## Standard Workflow for Each Phase (PR-First)
 
-1. **Create Branch**:
+1. **Create Feature Branch**:
    ```powershell
-   git checkout -b <branch-name>
+   git checkout -b <feature-branch-name>
    ```
 2. **Develop & Validate**:
-   - Run backend & frontend validations.
-   - Test container compatibility (`docker compose`).
-3. **Commit & Push**:
+   - Run backend & frontend validations (`npm run build`, endpoint tests).
+   - Test container compatibility and live browser UX.
+3. **Commit & Push to Remote**:
    ```powershell
    git add <modified-files>
    git commit -m "<conventional-commit-message>"
+   git push -u origin <feature-branch-name>
    ```
-4. **Merge into Main**:
+4. **Open Pull Request (PR)**:
+   - Open a PR from `<feature-branch-name>` targeting `main` on GitHub.
+   - Review code diff and validation summary.
+   - Merge strictly via the GitHub Pull Request interface (Squash & Merge or Merge Commit).
+5. **Sync Local Main**:
    ```powershell
    git checkout main
-   git merge <branch-name>
+   git pull origin main
    ```
