@@ -62,16 +62,16 @@ K8Pilot bridges standard containerized development services with the isolated Mi
 flowchart LR
     subgraph DockerBridge["k8pilot_default Docker Network"]
         direction TB
-        c_fe["k8pilot-frontend-1<br/>172.18.0.7:5173"]
-        c_be["k8pilot-backend-1<br/>172.18.0.6:8000"]
-        c_pg["k8pilot-postgres-1<br/>172.18.0.3:5432"]
-        c_redis["k8pilot-redis-1<br/>172.18.0.5:6379"]
-        c_ol["k8pilot-ollama-1<br/>172.18.0.4:11434"]
-        c_prom["k8pilot-prometheus-1<br/>172.18.0.2:9090"]
+        c_fe["k8pilot-frontend-1<br/>(service: frontend:5173)"]
+        c_be["k8pilot-backend-1<br/>(service: backend:8000)"]
+        c_pg["k8pilot-postgres-1<br/>(service: postgres:5432)"]
+        c_redis["k8pilot-redis-1<br/>(service: redis:6379)"]
+        c_ol["k8pilot-ollama-1<br/>(service: ollama:11434)"]
+        c_prom["k8pilot-prometheus-1<br/>(service: prometheus:9090)"]
     end
 
     subgraph MinikubeNet["K8Pilot Dedicated Minikube Network"]
-        c_k8s["Minikube Control Plane<br/>192.168.49.2:8443"]
+        c_k8s["Minikube Control Plane<br/>(K8Pilot:8443)"]
     end
 
     c_fe -->|"Vite Reverse Proxy"| c_be
@@ -82,7 +82,7 @@ flowchart LR
     c_be -.->|"Dual-Homed Network Interface"| c_k8s
 ```
 
-> **Network Isolation Note**: The backend container joins both `k8pilot_default` and `K8Pilot` networks, giving it direct connectivity to the Minikube API server at `https://192.168.49.2:8443` without routing through host loops.
+> **Network Isolation Note**: The backend container joins both `k8pilot_default` and `K8Pilot` networks, giving it direct connectivity to the Minikube API server on port 8443 without routing through host loops.
 
 ---
 
