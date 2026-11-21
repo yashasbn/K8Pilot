@@ -161,36 +161,42 @@ Context:
 
 @router.post("/chat")
 async def smart_chat(req: AnalyzeRequest, x_gemini_api_key: str | None = Header(None)):
-    """AI chat that can understand intent and execute cluster actions."""
+    """AI chat that can understand intent, provide diagnostics, and execute cluster actions."""
     user_message = req.context
 
-    # Get current cluster context for the AI
+    # Get current cluster context for the AI (aware of target namespace)
     cluster_context = _get_cluster_context(req)
 
-    # Ask the LLM to decide: answer or act
-    system_prompt = f"""You are K8Pilot, an AI Kubernetes operations assistant. You can EXECUTE actions on the cluster, not just explain them.
+    system_prompt = f"""You are K8Pilot, an expert AI Kubernetes site reliability engineer (SRE) and operations assistant.
 
-Available actions you can perform (respond with a JSON action block to execute):
-- {{"action": "delete_pod", "name": "<pod-name>", "namespace": "<ns>"}} — Stop/delete a pod
-- {{"action": "delete_namespace", "name": "<namespace>"}} — Delete an entire namespace and all its resources
-- {{"action": "scale", "deployment": "<name>", "namespace": "<ns>", "replicas": <n>}} — Scale a deployment
-- {{"action": "restart", "deployment": "<name>", "namespace": "<ns>"}} — Restart a deployment
-- {{"action": "get_logs", "name": "<pod-name>", "namespace": "<ns>"}} — Fetch pod logs
-- {{"action": "create", "manifest": "<yaml-string>", "namespace": "<ns>"}} — Create/deploy any Kubernetes resource
+YOUR CAPABILITIES:
+1. DIAGNOSTICS & TROUBLESHOOTING:
+   When the user asks to diagnose, explain, troubleshoot, or investigate a pod, error, or cluster incident:
+   - Provide a structured technical diagnostic report in clean markdown.
+   - Breakdown:
+     * **Health Summary**: Assess if the issue is benign/informational (e.g. API deprecations, transient restarts), a warning, or a critical crash (CrashLoopBackOff, OOMKilled).
+     * **Log & Error Analysis**: Explain what the log messages, deprecation notices, or exit codes mean in plain English.
+     * **Root Cause**: Why it happened.
+     * **Recommended Fix / Next Steps**: Concrete steps for the operator.
+   - Do NOT output an action block when providing a diagnosis unless a specific operational action is genuinely required to fix the issue.
+
+2. CLUSTER ACTIONS:
+   When the user explicitly asks to perform an action on the cluster (or when an operational fix is necessary):
+   Respond with a JSON action block wrapped in ```action ... ``` code tags:
+   - {{"action": "delete_pod", "name": "<pod-name>", "namespace": "<ns>"}} — Delete a pod (triggering recreate)
+   - {{"action": "delete_namespace", "name": "<namespace>"}} — Delete a namespace
+   - {{"action": "scale", "deployment": "<name>", "namespace": "<ns>", "replicas": <n>}} — Scale a deployment
+   - {{"action": "restart", "deployment": "<name>", "namespace": "<ns>"}} — Rollout restart a deployment
+   - {{"action": "create", "manifest": "<yaml-string>", "namespace": "<ns>"}} — Deploy a resource
+
+CRITICAL RULES:
+- NEVER output fake, illustrative, or placeholder action blocks in conversational prose (do not output "For example: delete_pod...").
+- NEVER suggest deleting unrelated pods.
+- If the user asks a question or asks for a diagnosis, provide your answer directly in plain markdown.
 
 CURRENT CLUSTER STATE:
 {cluster_context}
-
-RULES:
-1. If the user asks to perform an action, respond with ONLY a JSON action block wrapped in ```action tags.
-2. If the user asks a question, answer in plain text.
-3. Use the cluster state above to resolve ambiguous references.
-4. For the "create" action, ensure the "manifest" field is a single valid JSON string containing the complete YAML.
-
-Example:
-```action
-{{"action": "delete_pod", "name": "nginx-xyz-abc", "namespace": "default"}}
-```"""
+"""
 
     full_prompt = f"""{system_prompt}
 
@@ -200,11 +206,15 @@ User: {user_message}"""
     response_text = llm_response.get("response", "")
     use_model = llm_response.get("model", settings.ollama_model)
 
-    # ── Action extraction ────────────────────────────────────────────────────
-    # Robust extractor: tracks brace depth to correctly handle manifests with
-    # nested YAML that contains braces/newlines (breaks simple regex).
-    def extract_json_objects(text: str) -> list[str]:
-        """Find all top-level JSON objects that contain an 'action' key."""
+    # ── Action extraction with safety check ──────────────────────────────────
+    def is_example_text(full_text: str, match_pos: int) -> bool:
+        """Check if action is merely mentioned as a conversational example."""
+        lookback = full_text[max(0, match_pos - 150):match_pos].lower()
+        indicators = ["for example", "such as", "e.g.", "like this:", "here is an example", "what's your first command"]
+        return any(ind in lookback for ind in indicators)
+
+    def extract_json_objects(text: str) -> list[dict]:
+        """Find all top-level JSON objects containing an 'action' key."""
         results = []
         i = 0
         while i < len(text):
@@ -231,12 +241,13 @@ User: {user_message}"""
                             depth -= 1
                             if depth == 0:
                                 candidate = text[start:j+1]
-                                try:
-                                    parsed = json.loads(candidate)
-                                    if isinstance(parsed, dict) and "action" in parsed:
-                                        results.append(candidate)
-                                except json.JSONDecodeError:
-                                    pass
+                                if not is_example_text(text, start):
+                                    try:
+                                        parsed = json.loads(candidate)
+                                        if isinstance(parsed, dict) and "action" in parsed:
+                                            results.append(parsed)
+                                    except json.JSONDecodeError:
+                                        pass
                                 i = j + 1
                                 break
                 else:
@@ -246,29 +257,26 @@ User: {user_message}"""
                 i += 1
         return results
 
-    action_strings = []
+    pending_actions = []
 
-    # 1. Check for ```action, ```json, or ```yaml code fences first
-    code_blocks = re.findall(r'`{2,3}(?:action|json|yaml)?\s*\n?(.*?)\n?`{2,3}', response_text, re.DOTALL)
-    for block in code_blocks:
-        action_strings.extend(extract_json_objects(block))
+    # 1. Check for ```action code fences
+    fence_matches = list(re.finditer(r'`{2,3}(?:action|json|yaml)?\s*\n?(.*?)\n?`{2,3}', response_text, re.DOTALL))
+    for m in fence_matches:
+        if not is_example_text(response_text, m.start()):
+            extracted = extract_json_objects(m.group(1))
+            pending_actions.extend(extracted)
 
-    # 2. If nothing found in fences, scan the full response text
-    if not action_strings:
-        action_strings = extract_json_objects(response_text)
+    # 2. If nothing found in fences, scan full text (ignoring example contexts)
+    if not pending_actions and "```" not in response_text:
+        pending_actions = extract_json_objects(response_text)
 
-    if action_strings:
-        try:
-            pending = [json.loads(s.strip()) for s in action_strings]
-        except (json.JSONDecodeError, Exception) as e:
-            return {
-                "response": f"I planned some actions but could not parse them: {e}",
-                "model": use_model,
-            }
-        # Return pending actions for user confirmation — NOT auto-executed
+    # Filter out read-only queries like 'get_logs' from requiring authorization
+    action_candidates = [act for act in pending_actions if act.get("action") != "get_logs"]
+
+    if action_candidates:
         return {
             "response": response_text,
-            "pending_actions": pending,
+            "pending_actions": action_candidates,
             "model": use_model,
         }
 
@@ -309,27 +317,31 @@ Provide recommendations in a structured format with estimated savings."""
 
 
 def _get_cluster_context(req: AnalyzeRequest) -> str:
-    """Gather current cluster state for AI context."""
+    """Gather current cluster state for AI context, supporting target namespace."""
+    user_msg = req.context or ""
     try:
         v1 = get_k8s_client()
-        # List pods in default namespace
-        pods = v1.list_namespaced_pod(namespace="default")
+        ns_match = re.search(r"namespace\s+['\"]?([a-zA-Z0-9_-]+)['\"]?", user_msg, re.IGNORECASE)
+        target_ns = ns_match.group(1) if ns_match else "default"
+
+        # List pods in target namespace
+        pods = v1.list_namespaced_pod(namespace=target_ns)
         pod_list = []
         for i, pod in enumerate(pods.items, 1):
             restarts = sum(cs.restart_count for cs in (pod.status.container_statuses or []))
             pod_list.append(f"  {i}. {pod.metadata.name} (phase={pod.status.phase}, restarts={restarts})")
 
-        # List deployments
-        apps = get_apps_client()
-        deps = apps.list_namespaced_deployment(namespace="default")
-        dep_list = []
-        for d in deps.items:
-            dep_list.append(f"  - {d.metadata.name} (replicas={d.spec.replicas}, available={d.status.available_replicas or 0})")
-
-        context = "Pods in 'default' namespace:\n"
+        context = f"Pods in '{target_ns}' namespace:\n"
         context += "\n".join(pod_list) if pod_list else "  (none)"
-        context += "\n\nDeployments in 'default' namespace:\n"
-        context += "\n".join(dep_list) if dep_list else "  (none)"
+
+        if target_ns != "default":
+            try:
+                def_pods = v1.list_namespaced_pod(namespace="default")
+                def_list = [f"  - {p.metadata.name} ({p.status.phase})" for p in def_pods.items]
+                context += f"\n\nPods in 'default' namespace:\n" + "\n".join(def_list)
+            except Exception:
+                pass
+
         return context
     except Exception as e:
         return f"(Could not fetch cluster state: {e})"
@@ -422,7 +434,7 @@ async def _call_ollama(prompt: str, model: str | None = None) -> dict:
     """Call Ollama API for LLM completion."""
     use_model = model or settings.ollama_model
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=180.0) as client:
             resp = await client.post(
                 f"{settings.ollama_url}/api/generate",
                 json={

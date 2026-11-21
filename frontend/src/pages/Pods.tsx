@@ -316,12 +316,19 @@ function PodDrawer({
   }
 
   const triggerDiagnosis = () => {
-    const contextPrompt = `Please diagnose issue with pod '${pod.name}' in namespace '${pod.namespace}'.
+    const recentLogs = logs ? logs.slice(-800) : '(No logs recorded)'
+    const contextPrompt = `Please diagnose pod '${pod.name}' in namespace '${pod.namespace}'.
 Current Phase: ${pod.phase}
-Status/Reason: ${pod.status_reason}
+Status: ${pod.status_reason}
 Total Restarts: ${pod.restarts}
-Recent logs summary or events:
-${logs.slice(-500)}`
+Recent Logs:
+${recentLogs}
+
+Provide a structured technical diagnosis:
+1. Health Summary: Is this a critical error, harmless warning/deprecation, or normal behavior?
+2. Log Analysis: Explain the log messages or warnings shown above.
+3. Root Cause: Why it restarted or produced these logs.
+4. Recommendations: What should the operator do (if anything)?`
     onDiagnose(contextPrompt)
   }
 
