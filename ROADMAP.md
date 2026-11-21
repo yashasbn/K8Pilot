@@ -39,28 +39,29 @@ main
 
 ## Phase Details
 
-### Phase 1: Metrics, Events & Model Selector UX
+### Phase 1: Metrics, Events & Model Selector UX (Completed ✅)
 * **Branch**: `feature/phase1-metrics-events-model-selector`
-* **Target Merge**: `main`
-* **Key Deliverables**:
+* **Status**: Completed & Validated
+* **Delivered Features**:
   1. **Revamped Model Selector Dropdown**:
-     - Replace the single long scroll list in `AIChat.tsx` with a clean tabbed interface:
-       - `[ Local Models (Ollama) ]`
-       - `[ Cloud (Google Gemini) ]`
-       - `[ Download Recommended ]`
-     - Add instant search filtering (`Search models...`) to find models in seconds.
-     - Automatically open to the tab of the currently active model (defaults to Local).
-     - Keep installed local models immediately visible at the top without scrolling past 20+ Gemini models.
+     - Segmented tabs: `[ Local (Ollama) ]`, `[ Gemini (Cloud) ]`, `[ Pull (Download) ]`.
+     - Instant search filtering (`Search models...`) to find models in seconds without scrolling past cloud models.
+     - Automatically opens to the active model's category (defaults to Local).
   2. **Real-Time Cluster Metrics**:
-     - Implement backend endpoint `/api/cluster/metrics` querying the Kubernetes `metrics.k8s.io` API (via Minikube's built-in `metrics-server`).
-     - Display live CPU and Memory utilization percentages and progress bars on the Dashboard and Pods view.
+     - Backend endpoint `/api/cluster/metrics` querying Kubernetes `metrics.k8s.io` API.
+     - Live CPU and Memory utilization progress bars on the Dashboard and Pods table with exact millicores and GiB consumption.
   3. **Kubernetes Events API**:
-     - Implement backend endpoint `GET /api/cluster/events` with severity filters (`Warning`, `Normal`) and namespace filtering.
-     - Add a real-time Events feed component to surface `CrashLoopBackOff`, `OOMKilled`, `FailedScheduling`, and probe failures.
+     - Backend endpoint `GET /api/cluster/events` with severity filters (`Warning`, `All`) and namespace filtering.
+     - Real-time Events feed component on the Dashboard for rapid incident detection.
   4. **Interactive Pod Drawer & Live Logs**:
-     - Make pods in `Pods.tsx` clickable to open a slide-out drawer.
-     - View container statuses, recent pod events, and live tailing logs with auto-scroll.
-     - Add 1-click actions directly inside the drawer (*Restart Pod*, *View YAML*, *Ask AI to Diagnose*).
+     - Clickable pod rows opening a slide-out drawer with dark blurred backdrop overlay.
+     - Live container logs viewer (tail selector: 50, 100, 250 lines, auto-refresh, copy to clipboard).
+     - Pod-specific events tab and detailed container statuses.
+     - 1-click actions: *Restart Pod* and *Diagnose with AI* (with structured SRE diagnostic context).
+  5. **SRE Diagnostic Intelligence & Safety**:
+     - Intelligent prompt routing: separates technical SRE diagnostic requests from mutating actions.
+     - Dynamic target-namespace resolution (e.g. `kube-system`).
+     - Example-filtering guardrail: prevents conversational example actions from triggering real authorization cards.
 
 ---
 
@@ -97,17 +98,25 @@ main
 
 ---
 
-### Phase 4: Agentic AI Assistant & Token Streaming
+### Phase 4: Autonomous SRE Agent & Token Streaming
 * **Branch**: `feature/phase4-agentic-ai-streaming`
 * **Target Merge**: `main`
 * **Key Deliverables**:
-  1. **Server-Sent Events (SSE) Streaming**:
-     - Replace blocking `/api/ai/chat` with SSE endpoint `/api/ai/chat/stream`.
-     - Stream LLM tokens in real time to the frontend for both Ollama and Gemini models.
-  2. **Autonomous Tool Calling**:
-     - Enable the AI assistant to autonomously invoke cluster tools:
-       - `fetch_pod_logs(pod, namespace, tail)`
-       - `fetch_pod_events(pod, namespace)`
+  1. **Autonomous ReAct Agent Loop (`backend/app/core/agent.py`)**:
+     - Implement a true multi-step ReAct agent loop (`Thought` ➔ `Action/Tool` ➔ `Observation` ➔ `Synthesis`).
+     - Replaces single-turn static prompts with iterative, self-directed investigation (max 4 steps).
+     - Works seamlessly across local Ollama models (`llama3`) and Google Gemini.
+  2. **Kubernetes Agent Tools**:
+     - `get_pod_status(name, namespace)`: Exact container statuses, readiness, exit codes.
+     - `get_pod_logs(name, namespace, tail_lines, container)`: Live container logs.
+     - `get_pod_events(name, namespace)`: Warning and normal events specifically for the pod.
+     - `get_deployment_status(name, namespace)`: Replica counts, rollout conditions, selectors.
+     - `get_cluster_metrics()`: Live CPU/Memory pressure on nodes and pods.
+  3. **Agent Thought Visibility in UI**:
+     - Display intermediate tool execution steps in the chat (e.g. `🔍 Inspecting pod events...`, `📋 Reading recent logs...`).
+     - Transparent reasoning so operators can see exactly how the agent reached its diagnosis.
+  4. **Server-Sent Events (SSE) Streaming**:
+     - Stream LLM tokens in real time to the frontend for zero-latency response perception.
        - `describe_workload(deployment, namespace)`
      - AI investigates multi-step issues and summarizes findings with evidence before recommending action.
   3. **1-Click "Diagnose with AI" Flow**:
