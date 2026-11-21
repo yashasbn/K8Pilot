@@ -197,15 +197,22 @@ export default function Pods() {
 
       {/* Slide-out Pod Drawer */}
       {selectedPod && (
-        <PodDrawer
-          pod={selectedPod}
-          metric={podMetrics[`${selectedPod.namespace}/${selectedPod.name}`]}
-          onClose={() => setSelectedPod(null)}
-          onRestartSuccess={() => refetchPods()}
-          onDiagnose={prompt => {
-            navigate('/ai', { state: { initialPrompt: prompt } })
-          }}
-        />
+        <>
+          {/* Backdrop overlay */}
+          <div
+            className="fixed inset-0 bg-black/60 backdrop-blur-xs z-40 transition-opacity animate-in fade-in duration-200"
+            onClick={() => setSelectedPod(null)}
+          />
+          <PodDrawer
+            pod={selectedPod}
+            metric={podMetrics[`${selectedPod.namespace}/${selectedPod.name}`]}
+            onClose={() => setSelectedPod(null)}
+            onRestartSuccess={() => refetchPods()}
+            onDiagnose={prompt => {
+              navigate('/ai', { state: { initialPrompt: prompt } })
+            }}
+          />
+        </>
       )}
     </div>
   )
