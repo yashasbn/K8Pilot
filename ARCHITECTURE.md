@@ -8,48 +8,61 @@ This document provides a comprehensive technical overview of **K8Pilot**, an AI-
 
 ```mermaid
 flowchart TD
-    subgraph ClientLayer["Client Layer (Browser)"]
-        UI["React 18 + Vite SPA<br/>(Tailwind CSS, TanStack React Query)"]
+    classDef clientStyle fill:#0c4a6e,stroke:#38bdf8,stroke-width:2px,color:#f0f9ff;
+    classDef gatewayStyle fill:#1e1b4b,stroke:#818cf8,stroke-width:1.5px,color:#e0e7ff;
+    classDef backendStyle fill:#31104b,stroke:#c084fc,stroke-width:2px,color:#faf5ff;
+    classDef dbStyle fill:#064e3b,stroke:#34d399,stroke-width:2px,color:#ecfdf5;
+    classDef aiStyle fill:#581c87,stroke:#f472b6,stroke-width:2px,color:#fdf2f8;
+    classDef promStyle fill:#78350f,stroke:#fbbf24,stroke-width:2px,color:#fffbeb;
+    classDef k8sStyle fill:#172554,stroke:#60a5fa,stroke-width:2px,color:#eff6ff;
+
+    subgraph ClientLayer["🌐 Client Layer (Browser)"]
+        UI["React 18 + Vite SPA<br/>(Tailwind CSS, TanStack Query)"]:::clientStyle
     end
 
-    subgraph HostGateway["Docker Compose Host Boundary (localhost)"]
-        FE_Port["Port 5173 (Frontend Dev Server)"]
-        BE_Port["Port 8000 (FastAPI API Gateway)"]
-        Prom_Port["Port 9090 (Prometheus Web UI)"]
-        Ollama_Port["Port 11434 (Ollama LLM Engine)"]
-        PG_Port["Port 5432 (PostgreSQL Database)"]
-        Redis_Port["Port 6379 (Redis Cache)"]
+    subgraph HostGateway["🚪 Host Gateway Ports (localhost)"]
+        FE_Port["Port 5173 (Vite Web UI)"]:::gatewayStyle
+        BE_Port["Port 8000 (FastAPI Gateway)"]:::gatewayStyle
+        Prom_Port["Port 9090 (Prometheus)"]:::gatewayStyle
+        Ollama_Port["Port 11434 (Ollama)"]:::gatewayStyle
+        PG_Port["Port 5432 (PostgreSQL)"]:::gatewayStyle
+        Redis_Port["Port 6379 (Redis)"]:::gatewayStyle
     end
 
-    subgraph ServiceLayer["Core Application & Data Services"]
-        Backend["FastAPI Backend<br/>(Async Python 3.12, Uvicorn)"]
-        Postgres[("PostgreSQL 16<br/>(Cluster Audit, Sessions)")]
-        Redis[("Redis 7<br/>(Ephemeral Cache & Queues)")]
-        Ollama["Ollama Local AI<br/>(llama3:latest 8B)"]
-        GeminiCloud["Google Gemini API<br/>(Gemini 2.5/2.0 Flash/Pro)"]
-        Prometheus["Prometheus TSDB<br/>(Metric Scraper & Alerts)"]
+    subgraph ServiceLayer["⚙️ Core Application & Data Services"]
+        Backend["FastAPI Backend<br/>(Async Python 3.12, Uvicorn)"]:::backendStyle
+        Postgres[("PostgreSQL 16<br/>(Audit Log, Sessions)")]:::dbStyle
+        Redis[("Redis 7<br/>(Cache & State)")]:::dbStyle
+        Ollama["Ollama Local LLM<br/>(llama3:latest 8B)"]:::aiStyle
+        GeminiCloud["Google Gemini Cloud API<br/>(Gemini 2.5/2.0 Flash)"]:::aiStyle
+        Prometheus["Prometheus TSDB<br/>(Scraper & Metrics)"]:::promStyle
     end
 
-    subgraph K8sLayer["Kubernetes Cluster Boundary (Minikube: K8Pilot)"]
-        APIServer["kube-apiserver<br/>(:8443 TLS)"]
-        Kubelet["kubelet & cAdvisor"]
-        MetricsServer["metrics-server<br/>(metrics.k8s.io/v1beta1)"]
-        Workloads["User Workloads & Deployments<br/>(nginx, databases, microservices)"]
+    subgraph K8sLayer["⎈ Kubernetes Cluster Boundary (Minikube)"]
+        APIServer["kube-apiserver<br/>(:8443 TLS)"]:::k8sStyle
+        Kubelet["kubelet & cAdvisor"]:::k8sStyle
+        MetricsServer["metrics-server<br/>(metrics.k8s.io)"]:::k8sStyle
+        Workloads["User Workloads & Deployments<br/>(nginx, test apps)"]:::k8sStyle
     end
 
     UI -->|"HTTP / WebSocket"| FE_Port
     FE_Port -->|"Proxy /api & /health"| Backend
     Backend -->|"Persist state"| Postgres
     Backend -->|"Session cache"| Redis
-    Backend -->|"Local LLM inference"| Ollama
-    Backend -->|"Cloud LLM inference"| GeminiCloud
+    Backend -->|"Local inference"| Ollama
+    Backend -->|"Cloud inference"| GeminiCloud
     Backend -->|"PromQL queries"| Prometheus
-    Backend -->|"TLS with mounted Kubeconfig"| APIServer
+    Backend -->|"TLS with Kubeconfig"| APIServer
 
     APIServer --> MetricsServer
     APIServer --> Kubelet
     APIServer --> Workloads
-    MetricsServer -->|"Pod & Node metrics"| Kubelet
+    MetricsServer -->|"Resource utilization"| Kubelet
+
+    style ClientLayer fill:#082f49,stroke:#0284c7,stroke-width:2px,color:#e0f2fe
+    style HostGateway fill:#0f172a,stroke:#475569,stroke-width:2px,color:#cbd5e1
+    style ServiceLayer fill:#18181b,stroke:#52525b,stroke-width:2px,color:#e4e4e7
+    style K8sLayer fill:#0f172a,stroke:#2563eb,stroke-width:2px,color:#bfdbfe
 ```
 
 ---
@@ -60,18 +73,26 @@ K8Pilot bridges standard containerized development services with the isolated Mi
 
 ```mermaid
 flowchart LR
-    subgraph DockerBridge["k8pilot_default Docker Network"]
+    classDef feBox fill:#042f2e,stroke:#14b8a6,stroke-width:2px,color:#ccfbf1;
+    classDef beBox fill:#1e1b4b,stroke:#818cf8,stroke-width:2px,color:#e0e7ff;
+    classDef pgBox fill:#064e3b,stroke:#22c55e,stroke-width:2px,color:#dcfce7;
+    classDef rdBox fill:#450a0a,stroke:#f87171,stroke-width:2px,color:#fee2e2;
+    classDef olBox fill:#3b0764,stroke:#c084fc,stroke-width:2px,color:#f3e8ff;
+    classDef prBox fill:#451a03,stroke:#fbbf24,stroke-width:2px,color:#fef3c7;
+    classDef k8sBox fill:#0c4a6e,stroke:#38bdf8,stroke-width:2px,color:#e0f2fe;
+
+    subgraph DockerBridge["🐳 k8pilot_default Docker Bridge Network"]
         direction TB
-        c_fe["k8pilot-frontend-1<br/>(service: frontend:5173)"]
-        c_be["k8pilot-backend-1<br/>(service: backend:8000)"]
-        c_pg["k8pilot-postgres-1<br/>(service: postgres:5432)"]
-        c_redis["k8pilot-redis-1<br/>(service: redis:6379)"]
-        c_ol["k8pilot-ollama-1<br/>(service: ollama:11434)"]
-        c_prom["k8pilot-prometheus-1<br/>(service: prometheus:9090)"]
+        c_fe["k8pilot-frontend-1<br/>(service: frontend:5173)"]:::feBox
+        c_be["k8pilot-backend-1<br/>(service: backend:8000)"]:::beBox
+        c_pg["k8pilot-postgres-1<br/>(service: postgres:5432)"]:::pgBox
+        c_redis["k8pilot-redis-1<br/>(service: redis:6379)"]:::rdBox
+        c_ol["k8pilot-ollama-1<br/>(service: ollama:11434)"]:::olBox
+        c_prom["k8pilot-prometheus-1<br/>(service: prometheus:9090)"]:::prBox
     end
 
-    subgraph MinikubeNet["K8Pilot Dedicated Minikube Network"]
-        c_k8s["Minikube Control Plane<br/>(K8Pilot:8443)"]
+    subgraph MinikubeNet["⎈ K8Pilot Dedicated Minikube Network"]
+        c_k8s["Minikube Control Plane<br/>(K8Pilot:8443)"]:::k8sBox
     end
 
     c_fe -->|"Vite Reverse Proxy"| c_be
@@ -80,6 +101,9 @@ flowchart LR
     c_be --> c_ol
     c_be --> c_prom
     c_be -.->|"Dual-Homed Network Interface"| c_k8s
+
+    style DockerBridge fill:#18181b,stroke:#3f3f46,stroke-width:2px,color:#fafafa
+    style MinikubeNet fill:#082f49,stroke:#0284c7,stroke-width:2px,color:#e0f2fe
 ```
 
 > **Network Isolation Note**: The backend container joins both `k8pilot_default` and `K8Pilot` networks, giving it direct connectivity to the Minikube API server on port 8443 without routing through host loops.
@@ -225,24 +249,34 @@ stateDiagram-v2
 
 ```mermaid
 flowchart TD
-    subgraph Class1["Read-Only Informational Operations"]
-        R1["Pod Status & Details"]
-        R2["Live Container Logs"]
-        R3["Cluster Events"]
-        R4["CPU & Memory Metrics"]
-        R5["YAML Manifest Inspection"]
+    classDef readStyle fill:#064e3b,stroke:#10b981,stroke-width:1.5px,color:#d1fae5;
+    classDef mutateStyle fill:#4c0519,stroke:#f43f5e,stroke-width:1.5px,color:#ffe4e6;
+    classDef safeOutStyle fill:#047857,stroke:#34d399,stroke-width:2px,color:#ffffff;
+    classDef guardStyle fill:#78350f,stroke:#f59e0b,stroke-width:2px,color:#fef3c7;
+    classDef execStyle fill:#1d4ed8,stroke:#60a5fa,stroke-width:2px,color:#ffffff;
+    classDef abortStyle fill:#881337,stroke:#fb7185,stroke-width:2px,color:#ffffff;
+
+    subgraph Class1["📖 Read-Only Informational Operations"]
+        R1["Pod Status & Details"]:::readStyle
+        R2["Live Container Logs"]:::readStyle
+        R3["Cluster Events"]:::readStyle
+        R4["CPU & Memory Metrics"]:::readStyle
+        R5["YAML Manifest Inspection"]:::readStyle
     end
 
-    subgraph Class2["Mutating / Destructive Operations"]
-        M1["Delete Pod (Restart)"]
-        M2["Scale Deployment"]
-        M3["Rollout Restart"]
-        M4["Apply / Create Manifest"]
-        M5["Delete Namespace"]
+    subgraph Class2["⚡ Mutating & Destructive Operations"]
+        M1["Delete Pod (Restart)"]:::mutateStyle
+        M2["Scale Deployment"]:::mutateStyle
+        M3["Rollout Restart"]:::mutateStyle
+        M4["Apply / Create Manifest"]:::mutateStyle
+        M5["Delete Namespace"]:::mutateStyle
     end
 
-    Class1 -->|"Direct Auto-Execution"| SafeOut["Immediate Response in UI"]
-    Class2 -->|"Blocked by Confirmation Barrier"| Guard["Human-in-the-Loop Dialog"]
-    Guard -->|"Operator Explicit Approval"| Exec["Execute on Cluster"]
-    Guard -->|"Operator Denies"| Abort["Cancel & Audit Log"]
+    Class1 -->|"Direct Auto-Execution"| SafeOut["Immediate Response in UI"]:::safeOutStyle
+    Class2 -->|"Blocked by Safety Barrier"| Guard["🛡️ Human-in-the-Loop Dialog"]:::guardStyle
+    Guard -->|"Operator Explicit Approval"| Exec["✅ Execute on Cluster"]:::execStyle
+    Guard -->|"Operator Denies"| Abort["⛔ Cancel & Audit Log"]:::abortStyle
+
+    style Class1 fill:#022c22,stroke:#059669,stroke-width:2px,color:#a7f3d0
+    style Class2 fill:#2a0813,stroke:#e11d48,stroke-width:2px,color:#fecdd3
 ```
