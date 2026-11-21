@@ -56,3 +56,12 @@ def get_apps_client() -> client.AppsV1Api:
         raise ConfigException("No Kubernetes cluster configured or reachable.")
     get_k8s_client()  # ensures config is loaded
     return client.AppsV1Api()
+
+
+def get_custom_objects_client() -> client.CustomObjectsApi:
+    """Return a CustomObjectsApi client."""
+    if not _ensure_config():
+        raise ConfigException("No Kubernetes cluster configured or reachable.")
+    get_k8s_client()  # ensures config is loaded
+    return client.CustomObjectsApi()
+

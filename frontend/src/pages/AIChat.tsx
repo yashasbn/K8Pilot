@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
+import { useLocation } from 'react-router-dom'
 import axios from 'axios'
-import { Send, ChevronDown, Cpu, Download, RefreshCw, Loader, Settings, X, Eye, EyeOff, Sparkles, ShieldAlert, Check, Trash2, Plus, RotateCcw, FileText, Scale } from 'lucide-react'
+import { Send, ChevronDown, Cpu, Download, RefreshCw, Loader, Settings, X, Eye, EyeOff, Sparkles, ShieldAlert, Check, Trash2, Plus, RotateCcw, FileText, Scale, Search } from 'lucide-react'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -82,6 +83,8 @@ export default function AIChat() {
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false)
   const [modelsLoading, setModelsLoading] = useState(true)
   const [downloadingModels, setDownloadingModels] = useState<string[]>([])
+  const [modelTab, setModelTab] = useState<'local' | 'cloud' | 'download'>('local')
+  const [modelSearch, setModelSearch] = useState('')
 
   const [geminiModels, setGeminiModels] = useState<GeminiModel[]>([])
   const [geminiModelsLoading, setGeminiModelsLoading] = useState(false)
@@ -94,8 +97,15 @@ export default function AIChat() {
   const dropdownRef = useRef<HTMLDivElement>(null)
   const settingsRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const location = useLocation()
 
   const isGeminiModel = selectedModel.startsWith('gemini-')
+
+  useEffect(() => {
+    if (location.state && (location.state as any).initialPrompt) {
+      setInput((location.state as any).initialPrompt)
+    }
+  }, [location.state])
 
   const fetchModels = async () => {
     try {
@@ -344,121 +354,227 @@ export default function AIChat() {
           <div className="relative" ref={dropdownRef}>
             <button
               id="model-selector-btn"
-              onClick={() => setModelDropdownOpen(!modelDropdownOpen)}
+              onClick={() => {
+                const nextOpen = !modelDropdownOpen
+                setModelDropdownOpen(nextOpen)
+                if (nextOpen) {
+                  // Auto-select tab matching current model
+                  if (isGeminiModel) setModelTab('cloud')
+                  else setModelTab('local')
+                  setModelSearch('')
+                }
+              }}
               className="flex items-center gap-2 bg-gray-800 border border-gray-700 hover:border-blue-500 rounded-lg px-3 py-2 text-sm transition-colors"
               disabled={modelsLoading}
             >
               {isGeminiModel ? <Sparkles size={14} className="text-blue-400" /> : <Cpu size={14} className="text-blue-400" />}
-              <span className="text-gray-300">{modelsLoading ? 'Loading...' : (selectedModel || 'Select model')}</span>
+              <span className="text-gray-300 font-medium">{modelsLoading ? 'Loading...' : (selectedModel || 'Select model')}</span>
               {currentModel && currentModel.size > 0 && <span className="text-xs text-gray-500">({formatSize(currentModel.size)})</span>}
               {downloadingModels.length > 0 && <Loader size={14} className="text-blue-400 animate-spin" />}
               <ChevronDown size={14} className={`text-gray-500 transition-transform ${modelDropdownOpen ? 'rotate-180' : ''}`} />
             </button>
 
             {modelDropdownOpen && (
-              <div className="absolute right-0 top-full mt-2 w-80 max-h-[75vh] overflow-y-auto border border-gray-700 rounded-xl shadow-2xl z-50 divide-y divide-gray-700" style={{ background: '#141920' }}>
+              <div className="absolute right-0 top-full mt-2 w-96 max-h-[80vh] flex flex-col border border-gray-700 rounded-xl shadow-2xl z-50 overflow-hidden" style={{ background: '#141920' }}>
                 {downloadingModels.length > 0 && (
-                  <div className="px-4 py-2 bg-blue-900/20 text-xs text-blue-300 flex items-center gap-2">
+                  <div className="px-4 py-2 bg-blue-900/30 border-b border-blue-500/20 text-xs text-blue-300 flex items-center gap-2">
                     <RefreshCw size={12} className="animate-spin" />
                     <span>Downloading: {downloadingModels.join(', ')}...</span>
                   </div>
                 )}
 
-                {/* Gemini Cloud Models */}
-                <div className="p-2">
-                  <span className="flex items-center gap-1.5 px-3 py-1 text-2xs uppercase tracking-wider font-semibold text-blue-400/80">
-                    <Sparkles size={10} /> Google Gemini (Cloud)
-                  </span>
-                  {!geminiApiKey && (
-                    <div className="mx-2 my-1 px-3 py-2 rounded-lg bg-amber-500/5 border border-amber-500/20 text-xs text-amber-400">
-                      Set your Gemini API key in ⚙️ Settings to use these models.
-                    </div>
-                  )}
-                  {geminiModelsLoading && (
-                    <div className="px-3 py-2 text-xs text-gray-400 flex items-center gap-2">
-                      <Loader size={12} className="animate-spin" /> Fetching models from Google...
-                    </div>
-                  )}
-                  {!geminiModelsLoading && geminiApiKey && geminiModels.length === 0 && (
-                    <div className="px-3 py-2 text-xs text-amber-400">No generateContent models found. Check your API key.</div>
-                  )}
-                  {geminiModels.map(gm => (
-                    <button
-                      key={gm.name}
-                      onClick={() => {
-                        setSelectedModel(gm.name)
-                        setModelDropdownOpen(false)
-                      }}
-                      className={`w-full text-left px-3 py-2.5 my-0.5 rounded-lg text-sm hover:bg-gray-700/60 transition-all flex items-center justify-between ${
-                        selectedModel === gm.name ? 'bg-blue-600/10 border-l-2 border-blue-500' : ''
-                      }`}
-                    >
-                      <div className="flex flex-col">
-                        <span className="text-gray-200 font-medium text-xs">{gm.displayName}</span>
-                        <span className="text-gray-500 text-3xs">
-                          {gm.inputTokenLimit ? `${(gm.inputTokenLimit / 1000).toFixed(0)}K ctx` : ''}
-                          {gm.inputTokenLimit && gm.description ? ' · ' : ''}
-                          {gm.description.slice(0, 40)}{gm.description.length > 40 ? '...' : ''}
-                        </span>
-                      </div>
-                      <span className="text-2xs text-blue-400 font-medium bg-blue-500/10 px-1.5 py-0.5 rounded">Cloud</span>
-                    </button>
-                  ))}
-                </div>
-
-                {/* Installed Local Models */}
-                <div className="p-2">
-                  <span className="block px-3 py-1 text-2xs uppercase tracking-wider font-semibold text-gray-400">Installed (Local)</span>
-                  {models.length === 0 ? (
-                    <div className="px-3 py-2 text-sm text-gray-500">No models found</div>
-                  ) : (
-                    models.map(model => (
-                      <button
-                        key={model.name}
-                        onClick={() => { setSelectedModel(model.name); setModelDropdownOpen(false) }}
-                        className={`w-full text-left px-3 py-2.5 my-0.5 rounded-lg text-sm hover:bg-gray-700/60 transition-all flex items-center justify-between ${
-                          selectedModel === model.name ? 'bg-blue-600/10 border-l-2 border-blue-500' : ''
-                        }`}
-                      >
-                        <div className="flex flex-col">
-                          <span className="text-gray-200 font-medium text-xs">{model.name}</span>
-                          {model.name === defaultModel && <span className="text-3xs text-blue-400 font-medium uppercase mt-0.5">default</span>}
-                        </div>
-                        <span className="text-2xs text-gray-400">{formatSize(model.size)}</span>
+                {/* Search bar */}
+                <div className="p-2 border-b border-gray-800 bg-gray-900/80">
+                  <div className="relative">
+                    <Search size={13} className="absolute left-2.5 top-2.5 text-gray-500" />
+                    <input
+                      type="text"
+                      placeholder="Search models..."
+                      value={modelSearch}
+                      onChange={e => setModelSearch(e.target.value)}
+                      className="w-full bg-gray-800/90 border border-gray-700/70 rounded-lg pl-8 pr-7 py-1.5 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                    />
+                    {modelSearch && (
+                      <button onClick={() => setModelSearch('')} className="absolute right-2 top-2 text-gray-500 hover:text-gray-300">
+                        <X size={12} />
                       </button>
-                    ))
-                  )}
+                    )}
+                  </div>
                 </div>
 
-                {/* Download Recommended */}
-                <div className="p-2" style={{ background: 'rgba(0,0,0,0.2)' }}>
-                  <span className="block px-3 py-1 text-2xs uppercase tracking-wider font-semibold text-gray-400 mb-1">Download Recommended</span>
-                  {RECOMMENDED_MODELS.map(rec => {
-                    const isInstalled = models.some(m => m.name.startsWith(rec.name))
-                    const isDownloading = downloadingModels.includes(rec.name)
-                    return (
-                      <div key={rec.name} className="flex items-center justify-between px-3 py-2 rounded-lg hover:bg-gray-700/30 transition-all">
-                        <div className="flex flex-col">
-                          <span className="text-xs font-medium text-gray-300">{rec.label}</span>
-                          <span className="text-3xs text-gray-500">{rec.size}</span>
-                        </div>
-                        {isInstalled ? (
-                          <span className="text-2xs text-green-400 font-medium bg-green-500/10 px-2 py-0.5 rounded">Installed</span>
-                        ) : isDownloading ? (
-                          <span className="text-2xs text-blue-400 font-medium bg-blue-500/10 px-2 py-0.5 rounded flex items-center gap-1">
-                            <Loader size={10} className="animate-spin" /> Pulling
-                          </span>
-                        ) : (
+                {/* Tabs */}
+                <div className="flex border-b border-gray-800 bg-gray-900/60 p-1.5 gap-1 text-xs">
+                  <button
+                    onClick={() => setModelTab('local')}
+                    className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg font-medium transition-all ${
+                      modelTab === 'local'
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
+                    }`}
+                  >
+                    <Cpu size={13} />
+                    <span>Local</span>
+                    <span className={`text-3xs px-1.5 py-0.5 rounded-full ${modelTab === 'local' ? 'bg-blue-700 text-blue-100' : 'bg-gray-800 text-gray-400'}`}>
+                      {models.length}
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={() => setModelTab('cloud')}
+                    className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg font-medium transition-all ${
+                      modelTab === 'cloud'
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
+                    }`}
+                  >
+                    <Sparkles size={13} />
+                    <span>Gemini</span>
+                    {geminiModels.length > 0 && (
+                      <span className={`text-3xs px-1.5 py-0.5 rounded-full ${modelTab === 'cloud' ? 'bg-blue-700 text-blue-100' : 'bg-gray-800 text-gray-400'}`}>
+                        {geminiModels.length}
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    onClick={() => setModelTab('download')}
+                    className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg font-medium transition-all ${
+                      modelTab === 'download'
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
+                    }`}
+                  >
+                    <Download size={13} />
+                    <span>Pull</span>
+                  </button>
+                </div>
+
+                {/* Tab Content List */}
+                <div className="overflow-y-auto max-h-[55vh] p-2 divide-y divide-gray-800/50">
+                  {/* TAB 1: LOCAL MODELS */}
+                  {modelTab === 'local' && (
+                    <div className="space-y-1">
+                      {models
+                        .filter(m => m.name.toLowerCase().includes(modelSearch.toLowerCase()))
+                        .map(model => (
                           <button
-                            onClick={() => startDownload(rec.name)}
-                            className="flex items-center gap-1 text-2xs font-medium text-blue-400 hover:text-white bg-blue-600/10 hover:bg-blue-600 px-2.5 py-1.5 rounded transition-all"
+                            key={model.name}
+                            onClick={() => { setSelectedModel(model.name); setModelDropdownOpen(false) }}
+                            className={`w-full text-left px-3 py-2.5 rounded-lg text-sm hover:bg-gray-800/80 transition-all flex items-center justify-between border ${
+                              selectedModel === model.name
+                                ? 'bg-blue-600/15 border-blue-500/50 text-white'
+                                : 'border-transparent text-gray-300'
+                            }`}
                           >
-                            <Download size={10} /> Download
+                            <div className="flex flex-col">
+                              <span className="font-semibold text-xs text-gray-100">{model.name}</span>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                {model.name === defaultModel && (
+                                  <span className="text-3xs text-blue-400 font-bold uppercase tracking-wide bg-blue-500/10 px-1 rounded">default</span>
+                                )}
+                                <span className="text-3xs text-emerald-400">installed</span>
+                              </div>
+                            </div>
+                            <span className="text-xs text-gray-400 font-mono">{formatSize(model.size)}</span>
                           </button>
-                        )}
-                      </div>
-                    )
-                  })}
+                        ))}
+                      {models.filter(m => m.name.toLowerCase().includes(modelSearch.toLowerCase())).length === 0 && (
+                        <div className="py-6 text-center text-xs text-gray-500">
+                          {models.length === 0 ? 'No local models found in Ollama.' : 'No local models match your search.'}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* TAB 2: CLOUD GEMINI MODELS */}
+                  {modelTab === 'cloud' && (
+                    <div className="space-y-1">
+                      {!geminiApiKey && (
+                        <div className="m-1 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300">
+                          <p className="font-semibold mb-1">Gemini API Key Required</p>
+                          <p className="text-3xs text-amber-400/80 mb-2">Set your Google Gemini API key in Settings to unlock cloud inference.</p>
+                          <button
+                            onClick={() => { setModelDropdownOpen(false); setSettingsOpen(true); }}
+                            className="bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 px-2.5 py-1 rounded text-xs font-medium transition"
+                          >
+                            Open Settings
+                          </button>
+                        </div>
+                      )}
+                      {geminiModelsLoading && (
+                        <div className="p-4 text-xs text-gray-400 flex items-center justify-center gap-2">
+                          <Loader size={14} className="animate-spin text-blue-400" /> Fetching models from Google...
+                        </div>
+                      )}
+                      {geminiModels
+                        .filter(gm =>
+                          gm.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
+                          gm.displayName.toLowerCase().includes(modelSearch.toLowerCase()) ||
+                          (gm.description && gm.description.toLowerCase().includes(modelSearch.toLowerCase()))
+                        )
+                        .map(gm => (
+                          <button
+                            key={gm.name}
+                            onClick={() => { setSelectedModel(gm.name); setModelDropdownOpen(false) }}
+                            className={`w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-gray-800/80 transition-all flex items-center justify-between border ${
+                              selectedModel === gm.name
+                                ? 'bg-blue-600/15 border-blue-500/50 text-white'
+                                : 'border-transparent text-gray-300'
+                            }`}
+                          >
+                            <div className="flex flex-col pr-2">
+                              <span className="font-semibold text-xs text-gray-100">{gm.displayName}</span>
+                              <span className="text-gray-500 text-3xs line-clamp-1">
+                                {gm.inputTokenLimit ? `${(gm.inputTokenLimit / 1000).toFixed(0)}K ctx` : ''}
+                                {gm.inputTokenLimit && gm.description ? ' · ' : ''}
+                                {gm.description}
+                              </span>
+                            </div>
+                            <span className="text-2xs text-blue-400 font-medium bg-blue-500/10 px-1.5 py-0.5 rounded shrink-0">Cloud</span>
+                          </button>
+                        ))}
+                      {geminiApiKey && !geminiModelsLoading && geminiModels.length === 0 && (
+                        <div className="py-6 text-center text-xs text-gray-500">No Gemini models found.</div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* TAB 3: DOWNLOAD RECOMMENDED */}
+                  {modelTab === 'download' && (
+                    <div className="space-y-1">
+                      {RECOMMENDED_MODELS
+                        .filter(rec =>
+                          rec.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
+                          rec.label.toLowerCase().includes(modelSearch.toLowerCase())
+                        )
+                        .map(rec => {
+                          const isInstalled = models.some(m => m.name.startsWith(rec.name))
+                          const isDownloading = downloadingModels.includes(rec.name)
+                          return (
+                            <div key={rec.name} className="flex items-center justify-between px-3 py-2 rounded-lg hover:bg-gray-800/40 transition-all">
+                              <div className="flex flex-col">
+                                <span className="text-xs font-semibold text-gray-200">{rec.label}</span>
+                                <span className="text-3xs text-gray-500">{rec.size}</span>
+                              </div>
+                              {isInstalled ? (
+                                <span className="text-2xs text-emerald-400 font-medium bg-emerald-500/10 px-2 py-0.5 rounded">Installed</span>
+                              ) : isDownloading ? (
+                                <span className="text-2xs text-blue-400 font-medium bg-blue-500/10 px-2 py-0.5 rounded flex items-center gap-1">
+                                  <Loader size={10} className="animate-spin" /> Pulling
+                                </span>
+                              ) : (
+                                <button
+                                  onClick={() => startDownload(rec.name)}
+                                  className="flex items-center gap-1 text-2xs font-medium text-blue-400 hover:text-white bg-blue-600/10 hover:bg-blue-600 px-2.5 py-1 rounded transition-all"
+                                >
+                                  <Download size={11} /> Pull
+                                </button>
+                              )}
+                            </div>
+                          )
+                        })}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
