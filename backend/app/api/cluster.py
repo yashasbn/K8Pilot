@@ -1,8 +1,16 @@
 from fastapi import APIRouter, HTTPException, Query
+import yaml
+from kubernetes import client
 from kubernetes.client.exceptions import ApiException
 from kubernetes.config.config_exception import ConfigException
 
-from app.core.kubernetes import get_k8s_client, get_apps_client, get_custom_objects_client, is_k8s_available
+from app.core.kubernetes import (
+    get_k8s_client,
+    get_apps_client,
+    get_custom_objects_client,
+    get_networking_client,
+    is_k8s_available,
+)
 
 router = APIRouter(prefix="/cluster", tags=["cluster"])
 
@@ -352,15 +360,256 @@ def list_deployments(namespace: str = "default"):
 
         result = []
         for d in deps.items:
+            images = [c.image for c in (d.spec.template.spec.containers or [])]
+            match_labels = d.spec.selector.match_labels if d.spec.selector else {}
             result.append({
                 "name": d.metadata.name,
                 "namespace": d.metadata.namespace,
-                "replicas": d.spec.replicas,
+                "replicas": d.spec.replicas or 0,
                 "available": d.status.available_replicas or 0,
                 "ready": d.status.ready_replicas or 0,
+                "updated": d.status.updated_replicas or 0,
+                "images": images,
+                "selector": match_labels,
+                "created_at": d.metadata.creation_timestamp.isoformat() if d.metadata.creation_timestamp else "",
             })
         return {"deployments": result, "cluster_connected": True}
     except ConfigException:
         return {"deployments": [], "cluster_connected": False}
     except ApiException as e:
+        raise HTTPException(status_code=e.status, detail=e.reason)
+
+
+@router.get("/workloads")
+def list_workloads(namespace: str = "default"):
+    """List Deployments, StatefulSets, and DaemonSets in a namespace (or all if '_all')."""
+    if not is_k8s_available():
+        return {
+            "deployments": [],
+            "statefulsets": [],
+            "daemonsets": [],
+            "cluster_connected": False,
+        }
+    try:
+        apps = get_apps_client()
+        is_all = namespace == "_all"
+
+        # 1. Deployments
+        dep_items = apps.list_deployment_for_all_namespaces().items if is_all else apps.list_namespaced_deployment(namespace=namespace).items
+        deployments = []
+        for d in dep_items:
+            images = [c.image for c in (d.spec.template.spec.containers or [])]
+            match_labels = d.spec.selector.match_labels if d.spec.selector else {}
+            deployments.append({
+                "name": d.metadata.name,
+                "namespace": d.metadata.namespace,
+                "replicas": d.spec.replicas or 0,
+                "ready": d.status.ready_replicas or 0,
+                "available": d.status.available_replicas or 0,
+                "updated": d.status.updated_replicas or 0,
+                "images": images,
+                "selector": match_labels,
+                "created_at": d.metadata.creation_timestamp.isoformat() if d.metadata.creation_timestamp else "",
+            })
+
+        # 2. StatefulSets
+        sts_items = apps.list_stateful_set_for_all_namespaces().items if is_all else apps.list_namespaced_stateful_set(namespace=namespace).items
+        statefulsets = []
+        for s in sts_items:
+            images = [c.image for c in (s.spec.template.spec.containers or [])]
+            match_labels = s.spec.selector.match_labels if s.spec.selector else {}
+            statefulsets.append({
+                "name": s.metadata.name,
+                "namespace": s.metadata.namespace,
+                "replicas": s.spec.replicas or 0,
+                "ready": s.status.ready_replicas or 0,
+                "current": s.status.current_replicas or 0,
+                "updated": s.status.updated_replicas or 0,
+                "images": images,
+                "selector": match_labels,
+                "created_at": s.metadata.creation_timestamp.isoformat() if s.metadata.creation_timestamp else "",
+            })
+
+        # 3. DaemonSets
+        ds_items = apps.list_daemon_set_for_all_namespaces().items if is_all else apps.list_namespaced_daemon_set(namespace=namespace).items
+        daemonsets = []
+        for ds in ds_items:
+            images = [c.image for c in (ds.spec.template.spec.containers or [])]
+            match_labels = ds.spec.selector.match_labels if ds.spec.selector else {}
+            daemonsets.append({
+                "name": ds.metadata.name,
+                "namespace": ds.metadata.namespace,
+                "desired": ds.status.desired_number_scheduled or 0,
+                "current": ds.status.current_number_scheduled or 0,
+                "ready": ds.status.number_ready or 0,
+                "available": ds.status.number_available or 0,
+                "misscheduled": ds.status.number_misscheduled or 0,
+                "images": images,
+                "selector": match_labels,
+                "created_at": ds.metadata.creation_timestamp.isoformat() if ds.metadata.creation_timestamp else "",
+            })
+
+        return {
+            "deployments": deployments,
+            "statefulsets": statefulsets,
+            "daemonsets": daemonsets,
+            "cluster_connected": True,
+        }
+    except ConfigException:
+        return {"deployments": [], "statefulsets": [], "daemonsets": [], "cluster_connected": False}
+    except ApiException as e:
+        raise HTTPException(status_code=e.status, detail=e.reason)
+
+
+@router.get("/services")
+def list_services(namespace: str = "default"):
+    """List services in a namespace (or all if '_all')."""
+    if not is_k8s_available():
+        return {"services": [], "cluster_connected": False}
+    try:
+        v1 = get_k8s_client()
+        is_all = namespace == "_all"
+        svc_items = v1.list_service_for_all_namespaces().items if is_all else v1.list_namespaced_service(namespace=namespace).items
+        services = []
+        for s in svc_items:
+            ports = []
+            for p in (s.spec.ports or []):
+                ports.append({
+                    "name": p.name or "",
+                    "port": p.port,
+                    "target_port": str(p.target_port),
+                    "protocol": p.protocol,
+                    "node_port": p.node_port or None,
+                })
+
+            external_ips = list(s.spec.external_i_ps or [])
+            if s.status.load_balancer and s.status.load_balancer.ingress:
+                for ing in s.status.load_balancer.ingress:
+                    if ing.ip:
+                        external_ips.append(ing.ip)
+                    if ing.hostname:
+                        external_ips.append(ing.hostname)
+
+            services.append({
+                "name": s.metadata.name,
+                "namespace": s.metadata.namespace,
+                "type": s.spec.type,
+                "cluster_ip": s.spec.cluster_ip or "",
+                "external_ips": external_ips,
+                "ports": ports,
+                "selector": s.spec.selector or {},
+                "created_at": s.metadata.creation_timestamp.isoformat() if s.metadata.creation_timestamp else "",
+            })
+        return {"services": services, "cluster_connected": True}
+    except ConfigException:
+        return {"services": [], "cluster_connected": False}
+    except ApiException as e:
+        raise HTTPException(status_code=e.status, detail=e.reason)
+
+
+@router.get("/ingresses")
+def list_ingresses(namespace: str = "default"):
+    """List ingress resources in a namespace (or all if '_all')."""
+    if not is_k8s_available():
+        return {"ingresses": [], "cluster_connected": False}
+    try:
+        net = get_networking_client()
+        is_all = namespace == "_all"
+        ing_items = net.list_ingress_for_all_namespaces().items if is_all else net.list_namespaced_ingress(namespace=namespace).items
+        ingresses = []
+        for ing in ing_items:
+            rules = []
+            for r in (ing.spec.rules or []):
+                paths = []
+                if r.http and r.http.paths:
+                    for p in r.http.paths:
+                        svc_name = p.backend.service.name if p.backend and p.backend.service else ""
+                        svc_port = (
+                            p.backend.service.port.number or p.backend.service.port.name
+                            if p.backend and p.backend.service and p.backend.service.port
+                            else ""
+                        )
+                        paths.append({
+                            "path": p.path or "/",
+                            "path_type": p.path_type or "Prefix",
+                            "backend_service": svc_name,
+                            "backend_port": str(svc_port),
+                        })
+                rules.append({
+                    "host": r.host or "*",
+                    "paths": paths,
+                })
+
+            lb_ips = []
+            if ing.status.load_balancer and ing.status.load_balancer.ingress:
+                for lb in ing.status.load_balancer.ingress:
+                    if lb.ip:
+                        lb_ips.append(lb.ip)
+                    if lb.hostname:
+                        lb_ips.append(lb.hostname)
+
+            ingresses.append({
+                "name": ing.metadata.name,
+                "namespace": ing.metadata.namespace,
+                "class_name": ing.spec.ingress_class_name or "",
+                "rules": rules,
+                "load_balancer": lb_ips,
+                "created_at": ing.metadata.creation_timestamp.isoformat() if ing.metadata.creation_timestamp else "",
+            })
+        return {"ingresses": ingresses, "cluster_connected": True}
+    except ConfigException:
+        return {"ingresses": [], "cluster_connected": False}
+    except ApiException as e:
+        raise HTTPException(status_code=e.status, detail=e.reason)
+
+
+@router.get("/manifest")
+def get_resource_manifest(kind: str = Query(...), name: str = Query(...), namespace: str = Query("default")):
+    """Export the live YAML manifest for any Kubernetes resource."""
+    if not is_k8s_available():
+        raise HTTPException(status_code=503, detail="Kubernetes cluster is not connected")
+
+    kind_lower = kind.lower().strip()
+    try:
+        v1 = get_k8s_client()
+        apps = get_apps_client()
+        net = get_networking_client()
+
+        obj = None
+        if kind_lower in ("pod", "pods"):
+            obj = v1.read_namespaced_pod(name=name, namespace=namespace)
+        elif kind_lower in ("deployment", "deployments"):
+            obj = apps.read_namespaced_deployment(name=name, namespace=namespace)
+        elif kind_lower in ("statefulset", "statefulsets"):
+            obj = apps.read_namespaced_stateful_set(name=name, namespace=namespace)
+        elif kind_lower in ("daemonset", "daemonsets"):
+            obj = apps.read_namespaced_daemon_set(name=name, namespace=namespace)
+        elif kind_lower in ("service", "services"):
+            obj = v1.read_namespaced_service(name=name, namespace=namespace)
+        elif kind_lower in ("ingress", "ingresses"):
+            obj = net.read_namespaced_ingress(name=name, namespace=namespace)
+        elif kind_lower in ("node", "nodes"):
+            obj = v1.read_node(name=name)
+        elif kind_lower in ("namespace", "namespaces"):
+            obj = v1.read_namespace(name=name)
+        elif kind_lower in ("event", "events"):
+            obj = v1.read_namespaced_event(name=name, namespace=namespace)
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported resource kind: '{kind}'")
+
+        data = client.ApiClient().sanitize_for_serialization(obj)
+        # Remove managedFields to keep YAML clean and readable
+        if isinstance(data, dict) and "metadata" in data and isinstance(data["metadata"], dict):
+            data["metadata"].pop("managedFields", None)
+
+        yaml_content = yaml.dump(data, sort_keys=False, default_flow_style=False)
+        return {
+            "kind": kind,
+            "name": name,
+            "namespace": namespace,
+            "yaml": yaml_content,
+        }
+    except ApiException as e:
+        if e.status == 404:
+            raise HTTPException(status_code=404, detail=f"{kind} '{name}' not found in namespace '{namespace}'")
         raise HTTPException(status_code=e.status, detail=e.reason)

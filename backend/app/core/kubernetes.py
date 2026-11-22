@@ -65,3 +65,12 @@ def get_custom_objects_client() -> client.CustomObjectsApi:
     get_k8s_client()  # ensures config is loaded
     return client.CustomObjectsApi()
 
+
+def get_networking_client() -> client.NetworkingV1Api:
+    """Return a NetworkingV1Api client."""
+    if not _ensure_config():
+        raise ConfigException("No Kubernetes cluster configured or reachable.")
+    get_k8s_client()  # ensures config is loaded
+    return client.NetworkingV1Api()
+
+
