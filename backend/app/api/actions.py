@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from kubernetes.client.exceptions import ApiException
 
 from app.core.kubernetes import get_k8s_client, get_apps_client
+from app.core.audit import record_audit_log
 
 router = APIRouter(prefix="/actions", tags=["actions"])
 
@@ -14,6 +15,7 @@ router = APIRouter(prefix="/actions", tags=["actions"])
 class DeletePodRequest(BaseModel):
     name: str
     namespace: str = "default"
+    initiated_by: str = "user"
 
 
 class ScaleRequest(BaseModel):
@@ -22,6 +24,7 @@ class ScaleRequest(BaseModel):
     kind: str = "Deployment"
     namespace: str = "default"
     replicas: int
+    initiated_by: str = "user"
 
 
 class RestartDeploymentRequest(BaseModel):
@@ -29,6 +32,7 @@ class RestartDeploymentRequest(BaseModel):
     name: Optional[str] = None
     kind: str = "Deployment"
     namespace: str = "default"
+    initiated_by: str = "user"
 
 
 class PodLogsRequest(BaseModel):
@@ -38,20 +42,42 @@ class PodLogsRequest(BaseModel):
 
 
 @router.post("/delete-pod")
-def delete_pod(req: DeletePodRequest):
+async def delete_pod(req: DeletePodRequest):
     """Delete (stop) a pod by name."""
     try:
         v1 = get_k8s_client()
         v1.delete_namespaced_pod(name=req.name, namespace=req.namespace)
-        return {"status": "success", "message": f"Pod '{req.name}' deleted from namespace '{req.namespace}'"}
+        msg = f"Pod '{req.name}' deleted from namespace '{req.namespace}'"
+        await record_audit_log(
+            action_type="delete_pod",
+            resource_kind="Pod",
+            resource_name=req.name,
+            namespace=req.namespace,
+            initiated_by=req.initiated_by,
+            payload={},
+            status="success",
+            message=msg,
+        )
+        return {"status": "success", "message": msg}
     except ApiException as e:
+        err_msg = f"Pod '{req.name}' not found in namespace '{req.namespace}'" if e.status == 404 else e.reason
+        await record_audit_log(
+            action_type="delete_pod",
+            resource_kind="Pod",
+            resource_name=req.name,
+            namespace=req.namespace,
+            initiated_by=req.initiated_by,
+            payload={},
+            status="failed",
+            message=err_msg,
+        )
         if e.status == 404:
-            raise HTTPException(status_code=404, detail=f"Pod '{req.name}' not found in namespace '{req.namespace}'")
+            raise HTTPException(status_code=404, detail=err_msg)
         raise HTTPException(status_code=e.status, detail=e.reason)
 
 
 @router.post("/scale")
-def scale_workload(req: ScaleRequest):
+async def scale_workload(req: ScaleRequest):
     """Scale a Deployment or StatefulSet to a specific number of replicas."""
     target_name = req.name or req.deployment
     if not target_name:
@@ -66,28 +92,55 @@ def scale_workload(req: ScaleRequest):
                 namespace=req.namespace,
                 body={"spec": {"replicas": req.replicas}},
             )
-            return {
-                "status": "success",
-                "message": f"StatefulSet '{target_name}' scaled to {req.replicas} replicas",
-            }
+            msg = f"StatefulSet '{target_name}' scaled to {req.replicas} replicas"
+            await record_audit_log(
+                action_type="scale",
+                resource_kind="StatefulSet",
+                resource_name=target_name,
+                namespace=req.namespace,
+                initiated_by=req.initiated_by,
+                payload={"replicas": req.replicas},
+                status="success",
+                message=msg,
+            )
+            return {"status": "success", "message": msg}
         else:
             apps.patch_namespaced_deployment_scale(
                 name=target_name,
                 namespace=req.namespace,
                 body={"spec": {"replicas": req.replicas}},
             )
-            return {
-                "status": "success",
-                "message": f"Deployment '{target_name}' scaled to {req.replicas} replicas",
-            }
+            msg = f"Deployment '{target_name}' scaled to {req.replicas} replicas"
+            await record_audit_log(
+                action_type="scale",
+                resource_kind="Deployment",
+                resource_name=target_name,
+                namespace=req.namespace,
+                initiated_by=req.initiated_by,
+                payload={"replicas": req.replicas},
+                status="success",
+                message=msg,
+            )
+            return {"status": "success", "message": msg}
     except ApiException as e:
+        err_msg = f"{req.kind} '{target_name}' not found in namespace '{req.namespace}'" if e.status == 404 else e.reason
+        await record_audit_log(
+            action_type="scale",
+            resource_kind=req.kind,
+            resource_name=target_name,
+            namespace=req.namespace,
+            initiated_by=req.initiated_by,
+            payload={"replicas": req.replicas},
+            status="failed",
+            message=err_msg,
+        )
         if e.status == 404:
-            raise HTTPException(status_code=404, detail=f"{req.kind} '{target_name}' not found in namespace '{req.namespace}'")
+            raise HTTPException(status_code=404, detail=err_msg)
         raise HTTPException(status_code=e.status, detail=e.reason)
 
 
 @router.post("/restart")
-def restart_workload(req: RestartDeploymentRequest):
+async def restart_workload(req: RestartDeploymentRequest):
     """Restart a Deployment, StatefulSet, or DaemonSet via rollout restart."""
     import datetime
 
@@ -117,33 +170,68 @@ def restart_workload(req: RestartDeploymentRequest):
                 namespace=req.namespace,
                 body=body,
             )
-            return {
-                "status": "success",
-                "message": f"StatefulSet '{target_name}' restarting (rollout restart)",
-            }
+            msg = f"StatefulSet '{target_name}' restarting (rollout restart)"
+            await record_audit_log(
+                action_type="restart",
+                resource_kind="StatefulSet",
+                resource_name=target_name,
+                namespace=req.namespace,
+                initiated_by=req.initiated_by,
+                payload={},
+                status="success",
+                message=msg,
+            )
+            return {"status": "success", "message": msg}
         elif kind_lower in ("daemonset", "daemonsets"):
             apps.patch_namespaced_daemon_set(
                 name=target_name,
                 namespace=req.namespace,
                 body=body,
             )
-            return {
-                "status": "success",
-                "message": f"DaemonSet '{target_name}' restarting (rollout restart)",
-            }
+            msg = f"DaemonSet '{target_name}' restarting (rollout restart)"
+            await record_audit_log(
+                action_type="restart",
+                resource_kind="DaemonSet",
+                resource_name=target_name,
+                namespace=req.namespace,
+                initiated_by=req.initiated_by,
+                payload={},
+                status="success",
+                message=msg,
+            )
+            return {"status": "success", "message": msg}
         else:
             apps.patch_namespaced_deployment(
                 name=target_name,
                 namespace=req.namespace,
                 body=body,
             )
-            return {
-                "status": "success",
-                "message": f"Deployment '{target_name}' restarting (rollout restart)",
-            }
+            msg = f"Deployment '{target_name}' restarting (rollout restart)"
+            await record_audit_log(
+                action_type="restart",
+                resource_kind="Deployment",
+                resource_name=target_name,
+                namespace=req.namespace,
+                initiated_by=req.initiated_by,
+                payload={},
+                status="success",
+                message=msg,
+            )
+            return {"status": "success", "message": msg}
     except ApiException as e:
+        err_msg = f"{req.kind} '{target_name}' not found in namespace '{req.namespace}'" if e.status == 404 else e.reason
+        await record_audit_log(
+            action_type="restart",
+            resource_kind=req.kind,
+            resource_name=target_name,
+            namespace=req.namespace,
+            initiated_by=req.initiated_by,
+            payload={},
+            status="failed",
+            message=err_msg,
+        )
         if e.status == 404:
-            raise HTTPException(status_code=404, detail=f"{req.kind} '{target_name}' not found in namespace '{req.namespace}'")
+            raise HTTPException(status_code=404, detail=err_msg)
         raise HTTPException(status_code=e.status, detail=e.reason)
 
 

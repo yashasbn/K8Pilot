@@ -1,13 +1,43 @@
 import { useState, useEffect, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
 import axios from 'axios'
-import { Send, ChevronDown, Cpu, Download, RefreshCw, Loader, Settings, X, Eye, EyeOff, Sparkles, ShieldAlert, Check, Trash2, Plus, RotateCcw, FileText, Scale, Search } from 'lucide-react'
+import {
+  Send,
+  ChevronDown,
+  Cpu,
+  Download,
+  RefreshCw,
+  Loader,
+  Settings,
+  X,
+  Eye,
+  EyeOff,
+  Sparkles,
+  ShieldAlert,
+  Check,
+  Trash2,
+  Plus,
+  RotateCcw,
+  FileText,
+  Scale,
+  Search,
+  MessageSquare,
+  ChevronLeft,
+} from 'lucide-react'
 
 interface Message {
   role: 'user' | 'assistant'
   content: string
   model?: string
   pendingActions?: PendingAction[]
+}
+
+interface ChatSessionItem {
+  id: string
+  title: string
+  created_at: string
+  updated_at: string
+  message_count: number
 }
 
 interface PendingAction {
@@ -94,12 +124,63 @@ export default function AIChat() {
   const [apiKeyInput, setApiKeyInput] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
 
+  // Chat sessions state
+  const [sessions, setSessions] = useState<ChatSessionItem[]>([])
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+
   const dropdownRef = useRef<HTMLDivElement>(null)
   const settingsRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const location = useLocation()
 
   const isGeminiModel = selectedModel.startsWith('gemini-')
+
+  const fetchSessions = async () => {
+    try {
+      const resp = await axios.get('/api/ai/sessions')
+      setSessions(resp.data.sessions || [])
+    } catch {
+      console.error('Could not fetch sessions')
+    }
+  }
+
+  const loadSession = async (sessionId: string) => {
+    try {
+      setLoading(true)
+      setActiveSessionId(sessionId)
+      const resp = await axios.get(`/api/ai/sessions/${sessionId}`)
+      const loaded: Message[] = (resp.data.messages || []).map((m: any) => ({
+        role: m.role,
+        content: m.content,
+        pendingActions: m.actions || undefined,
+      }))
+      setMessages(loaded)
+    } catch {
+      console.error('Failed to load session')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const startNewChat = () => {
+    setActiveSessionId(null)
+    setMessages([])
+  }
+
+  const deleteSession = async (sessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!confirm('Delete this conversation history?')) return
+    try {
+      await axios.delete(`/api/ai/sessions/${sessionId}`)
+      setSessions((prev) => prev.filter((s) => s.id !== sessionId))
+      if (activeSessionId === sessionId) {
+        startNewChat()
+      }
+    } catch {
+      console.error('Failed to delete session')
+    }
+  }
 
   useEffect(() => {
     if (location.state && (location.state as any).initialPrompt) {
@@ -148,6 +229,7 @@ export default function AIChat() {
 
   useEffect(() => {
     fetchModels()
+    fetchSessions()
     if (geminiApiKey) fetchGeminiModels(geminiApiKey)
   }, [])
 
@@ -208,7 +290,13 @@ export default function AIChat() {
         context: input,
         prompt: 'You are K8Pilot, an AI Kubernetes operations assistant.',
         model: selectedModel || undefined,
+        session_id: activeSessionId || undefined,
       }, { headers: buildHeaders() })
+
+      if (resp.data.session_id) {
+        setActiveSessionId(resp.data.session_id)
+        fetchSessions()
+      }
 
       const assistantMsg: Message = {
         role: 'assistant',
@@ -259,9 +347,84 @@ export default function AIChat() {
   const selectedGemini = geminiModels.find(m => m.name === selectedModel)
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-2xl font-bold">AI Assistant</h2>
+    <div className="flex h-full gap-4 overflow-hidden">
+      {/* Sessions Left Sidebar */}
+      {sidebarOpen ? (
+        <aside className="w-64 flex flex-col bg-gray-900 border border-gray-800 rounded-xl overflow-hidden shrink-0">
+          <div className="p-3 border-b border-gray-800 flex items-center justify-between bg-gray-900/90">
+            <div className="flex items-center gap-2 text-xs font-semibold text-gray-200">
+              <MessageSquare size={14} className="text-blue-400" />
+              <span>History</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={startNewChat}
+                className="flex items-center gap-1 px-2 py-1 rounded bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 border border-blue-500/30 text-[11px] font-medium transition"
+                title="New Conversation"
+              >
+                <Plus size={12} /> New
+              </button>
+              <button
+                onClick={() => setSidebarOpen(false)}
+                className="p-1 rounded text-gray-400 hover:text-white hover:bg-gray-800 transition"
+                title="Collapse history"
+              >
+                <ChevronLeft size={14} />
+              </button>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-auto p-2 space-y-1">
+            {sessions.length === 0 ? (
+              <div className="py-12 text-center text-xs text-gray-500">
+                No saved conversations
+              </div>
+            ) : (
+              sessions.map((sess) => {
+                const isActive = sess.id === activeSessionId
+                return (
+                  <div
+                    key={sess.id}
+                    onClick={() => loadSession(sess.id)}
+                    className={`group flex items-start justify-between p-2.5 rounded-lg cursor-pointer transition border text-xs ${
+                      isActive
+                        ? 'bg-blue-600/20 text-white border-blue-500/30 shadow-sm'
+                        : 'text-gray-300 hover:bg-gray-800/80 border-transparent hover:border-gray-800'
+                    }`}
+                  >
+                    <div className="flex-1 min-w-0 pr-1">
+                      <p className="font-medium truncate">{sess.title}</p>
+                      <p className="text-[10px] text-gray-500 mt-0.5 font-mono">
+                        {sess.message_count} {sess.message_count === 1 ? 'message' : 'messages'}
+                      </p>
+                    </div>
+                    <button
+                      onClick={(e) => deleteSession(sess.id, e)}
+                      className="opacity-0 group-hover:opacity-100 p-1 text-gray-500 hover:text-rose-400 hover:bg-gray-800 rounded transition"
+                      title="Delete session"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                )
+              })
+            )}
+          </div>
+        </aside>
+      ) : (
+        <button
+          onClick={() => setSidebarOpen(true)}
+          className="p-2 self-start bg-gray-900 border border-gray-800 rounded-lg text-gray-400 hover:text-white hover:bg-gray-800 transition shrink-0"
+          title="Open conversation history"
+        >
+          <MessageSquare size={16} />
+        </button>
+      )}
+
+      {/* Main Chat Area */}
+      <div className="flex-1 flex flex-col h-full min-w-0">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-2xl font-bold">AI Assistant</h2>
 
         <div className="flex items-center gap-2">
           {/* Settings */}
@@ -732,6 +895,7 @@ export default function AIChat() {
         >
           <Send size={18} />
         </button>
+      </div>
       </div>
     </div>
   )

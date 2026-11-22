@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation } from 'react-router-dom'
-import { Activity, Box, Layers, Network, MessageSquare } from 'lucide-react'
+import { Activity, Box, Layers, Network, MessageSquare, ShieldCheck } from 'lucide-react'
 
 export default function Layout() {
   const location = useLocation()
@@ -9,6 +9,7 @@ export default function Layout() {
     { to: '/pods', label: 'Pods', icon: Box },
     { to: '/workloads', label: 'Workloads', icon: Layers },
     { to: '/networking', label: 'Networking', icon: Network },
+    { to: '/audit', label: 'Audit Trail', icon: ShieldCheck },
     { to: '/ai', label: 'AI Assistant', icon: MessageSquare },
   ]
 
