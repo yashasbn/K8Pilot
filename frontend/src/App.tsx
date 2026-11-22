@@ -2,6 +2,8 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
 import Pods from './pages/Pods'
+import Workloads from './pages/Workloads'
+import Networking from './pages/Networking'
 import AIChat from './pages/AIChat'
 
 function App() {
@@ -11,6 +13,8 @@ function App() {
         <Route path="/" element={<Layout />}>
           <Route index element={<Dashboard />} />
           <Route path="pods" element={<Pods />} />
+          <Route path="workloads" element={<Workloads />} />
+          <Route path="networking" element={<Networking />} />
           <Route path="ai" element={<AIChat />} />
         </Route>
       </Routes>

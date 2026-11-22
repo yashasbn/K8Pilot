@@ -65,20 +65,26 @@ main
 
 ---
 
-### Phase 2: Workloads & Networking Management
+### Phase 2: Workloads & Networking Management (Completed ✅)
 * **Branch**: `feature/phase2-workloads-and-services`
-* **Target Merge**: `main`
-* **Key Deliverables**:
-  1. **Workloads View**:
-     - Dedicated page for Deployments, StatefulSets, and DaemonSets.
-     - Visual replica controls (scale up/down directly with stepper controls).
-     - Rollout status indicators and rollout restart triggers.
-  2. **Services & Ingress View**:
-     - List cluster Services (ClusterIP, NodePort, LoadBalancer) and mapped ports.
-     - Display Ingress rules and external hosts.
-  3. **Manifest Inspector**:
-     - Read-only YAML viewer for any cluster resource with syntax highlighting.
-     - Quick "Copy Manifest" and "Apply Manifest" actions.
+* **Target Merge**: `main` (via GitHub Pull Request)
+* **Delivered Features**:
+  1. **Workloads View (`/workloads`)**:
+     - Dedicated dashboard for Deployments, StatefulSets, and DaemonSets.
+     - Live interactive replica steppers (`[-]` / `[+]` with instant API scaling via `/api/actions/scale`).
+     - Real-time rollout status indicators (Ready/Target counters, available, updated, misscheduled).
+     - 1-click Rollout Restart triggers with animated progress states (`/api/actions/restart`).
+     - Image tags display and namespace filtering.
+  2. **Services & Ingress View (`/networking`)**:
+     - Comprehensive Service catalog with color-coded type badges (`ClusterIP`, `NodePort`, `LoadBalancer`, `ExternalName`).
+     - Port mapping representations (`port:nodePort/protocol` and targets).
+     - Label selector badges and external endpoint IPs.
+     - Ingress routing rules inspector (hosts, HTTP paths, and destination backends).
+  3. **Live Manifest Inspector (`ManifestModal`)**:
+     - Live YAML serialization of any cluster resource (Deployments, StatefulSets, DaemonSets, Services, Ingresses, Pods, Nodes).
+     - Cleaned-up YAML output (automatic stripping of cluster internal `managedFields`).
+     - 1-click "Copy YAML" and "Download .yaml" options.
+     - Dark monospaced inspector with line numbers.
 
 ---
 

@@ -17,13 +17,17 @@ class DeletePodRequest(BaseModel):
 
 
 class ScaleRequest(BaseModel):
-    deployment: str
+    deployment: Optional[str] = None
+    name: Optional[str] = None
+    kind: str = "Deployment"
     namespace: str = "default"
     replicas: int
 
 
 class RestartDeploymentRequest(BaseModel):
-    deployment: str
+    deployment: Optional[str] = None
+    name: Optional[str] = None
+    kind: str = "Deployment"
     namespace: str = "default"
 
 
@@ -47,56 +51,99 @@ def delete_pod(req: DeletePodRequest):
 
 
 @router.post("/scale")
-def scale_deployment(req: ScaleRequest):
-    """Scale a deployment to a specific number of replicas."""
+def scale_workload(req: ScaleRequest):
+    """Scale a Deployment or StatefulSet to a specific number of replicas."""
+    target_name = req.name or req.deployment
+    if not target_name:
+        raise HTTPException(status_code=400, detail="Missing resource name/deployment")
+
+    kind_lower = req.kind.lower()
     try:
         apps = get_apps_client()
-        apps.patch_namespaced_deployment_scale(
-            name=req.deployment,
-            namespace=req.namespace,
-            body={"spec": {"replicas": req.replicas}},
-        )
-        return {
-            "status": "success",
-            "message": f"Deployment '{req.deployment}' scaled to {req.replicas} replicas",
-        }
+        if kind_lower in ("statefulset", "statefulsets"):
+            apps.patch_namespaced_stateful_set_scale(
+                name=target_name,
+                namespace=req.namespace,
+                body={"spec": {"replicas": req.replicas}},
+            )
+            return {
+                "status": "success",
+                "message": f"StatefulSet '{target_name}' scaled to {req.replicas} replicas",
+            }
+        else:
+            apps.patch_namespaced_deployment_scale(
+                name=target_name,
+                namespace=req.namespace,
+                body={"spec": {"replicas": req.replicas}},
+            )
+            return {
+                "status": "success",
+                "message": f"Deployment '{target_name}' scaled to {req.replicas} replicas",
+            }
     except ApiException as e:
         if e.status == 404:
-            raise HTTPException(status_code=404, detail=f"Deployment '{req.deployment}' not found")
+            raise HTTPException(status_code=404, detail=f"{req.kind} '{target_name}' not found in namespace '{req.namespace}'")
         raise HTTPException(status_code=e.status, detail=e.reason)
 
 
 @router.post("/restart")
-def restart_deployment(req: RestartDeploymentRequest):
-    """Restart a deployment by triggering a rollout restart."""
+def restart_workload(req: RestartDeploymentRequest):
+    """Restart a Deployment, StatefulSet, or DaemonSet via rollout restart."""
     import datetime
 
-    try:
-        apps = get_apps_client()
-        now = datetime.datetime.utcnow().isoformat() + "Z"
-        body = {
-            "spec": {
-                "template": {
-                    "metadata": {
-                        "annotations": {
-                            "kubectl.kubernetes.io/restartedAt": now
-                        }
+    target_name = req.name or req.deployment
+    if not target_name:
+        raise HTTPException(status_code=400, detail="Missing resource name/deployment")
+
+    now = datetime.datetime.utcnow().isoformat() + "Z"
+    body = {
+        "spec": {
+            "template": {
+                "metadata": {
+                    "annotations": {
+                        "kubectl.kubernetes.io/restartedAt": now
                     }
                 }
             }
         }
-        apps.patch_namespaced_deployment(
-            name=req.deployment,
-            namespace=req.namespace,
-            body=body,
-        )
-        return {
-            "status": "success",
-            "message": f"Deployment '{req.deployment}' restarting (rollout restart)",
-        }
+    }
+
+    kind_lower = req.kind.lower()
+    try:
+        apps = get_apps_client()
+        if kind_lower in ("statefulset", "statefulsets"):
+            apps.patch_namespaced_stateful_set(
+                name=target_name,
+                namespace=req.namespace,
+                body=body,
+            )
+            return {
+                "status": "success",
+                "message": f"StatefulSet '{target_name}' restarting (rollout restart)",
+            }
+        elif kind_lower in ("daemonset", "daemonsets"):
+            apps.patch_namespaced_daemon_set(
+                name=target_name,
+                namespace=req.namespace,
+                body=body,
+            )
+            return {
+                "status": "success",
+                "message": f"DaemonSet '{target_name}' restarting (rollout restart)",
+            }
+        else:
+            apps.patch_namespaced_deployment(
+                name=target_name,
+                namespace=req.namespace,
+                body=body,
+            )
+            return {
+                "status": "success",
+                "message": f"Deployment '{target_name}' restarting (rollout restart)",
+            }
     except ApiException as e:
         if e.status == 404:
-            raise HTTPException(status_code=404, detail=f"Deployment '{req.deployment}' not found")
+            raise HTTPException(status_code=404, detail=f"{req.kind} '{target_name}' not found in namespace '{req.namespace}'")
         raise HTTPException(status_code=e.status, detail=e.reason)
 
 
