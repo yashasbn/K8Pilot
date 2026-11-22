@@ -1,13 +1,24 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import cluster, metrics, ai, health, actions
+from app.api import cluster, metrics, ai, health, actions, audit
 from app.core.config import settings
+from app.core.database import init_db
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initialize database tables on startup
+    await init_db()
+    yield
+
 
 app = FastAPI(
     title=settings.app_name,
     description="AI-powered Kubernetes operations platform",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -23,6 +34,7 @@ app.include_router(cluster.router, prefix="/api")
 app.include_router(metrics.router, prefix="/api")
 app.include_router(ai.router, prefix="/api")
 app.include_router(actions.router, prefix="/api")
+app.include_router(audit.router, prefix="/api")
 
 
 @app.get("/")

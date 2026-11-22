@@ -4,9 +4,15 @@ import httpx
 import json
 import re
 import yaml
+from datetime import datetime
+from sqlalchemy import select, desc, func
+from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.kubernetes import get_k8s_client, get_apps_client
+from app.core.database import AsyncSessionLocal
+from app.models.chat import ChatSession, ChatMessage
+from app.core.audit import record_audit_log
 from kubernetes import utils
 from kubernetes.client.exceptions import ApiException
 
@@ -20,6 +26,15 @@ class AnalyzeRequest(BaseModel):
     context: str  # logs, metrics, or incident description
     prompt: str = "Explain this Kubernetes issue in plain English and suggest a fix."
     model: str | None = None  # optional model override
+    session_id: str | None = None  # optional session for persistence
+
+
+class CreateSessionRequest(BaseModel):
+    title: str = "New Conversation"
+
+
+class UpdateSessionRequest(BaseModel):
+    title: str
 
 
 class GenerateManifestRequest(BaseModel):
@@ -159,10 +174,188 @@ Context:
     return await _dispatch_llm(full_prompt, model=req.model, api_key=x_gemini_api_key)
 
 
+@router.get("/sessions")
+async def list_sessions():
+    """List all saved chat sessions ordered by most recently updated."""
+    try:
+        async with AsyncSessionLocal() as session:
+            # Query sessions with message counts
+            stmt = (
+                select(
+                    ChatSession.id,
+                    ChatSession.title,
+                    ChatSession.created_at,
+                    ChatSession.updated_at,
+                    func.count(ChatMessage.id).label("message_count"),
+                )
+                .outerjoin(ChatMessage, ChatSession.id == ChatMessage.session_id)
+                .group_by(ChatSession.id)
+                .order_by(desc(ChatSession.updated_at))
+            )
+            result = await session.execute(stmt)
+            rows = result.all()
+            return {
+                "sessions": [
+                    {
+                        "id": row.id,
+                        "title": row.title,
+                        "created_at": row.created_at.isoformat() if row.created_at else None,
+                        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                        "message_count": row.message_count,
+                    }
+                    for row in rows
+                ]
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch sessions: {e}")
+
+
+@router.post("/sessions")
+async def create_session(req: CreateSessionRequest):
+    """Create a new empty chat session."""
+    try:
+        async with AsyncSessionLocal() as session:
+            new_session = ChatSession(title=req.title or "New Conversation")
+            session.add(new_session)
+            await session.commit()
+            await session.refresh(new_session)
+            return {
+                "id": new_session.id,
+                "title": new_session.title,
+                "created_at": new_session.created_at.isoformat() if new_session.created_at else None,
+                "updated_at": new_session.updated_at.isoformat() if new_session.updated_at else None,
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create session: {e}")
+
+
+@router.get("/sessions/{session_id}")
+async def get_session(session_id: str):
+    """Get a chat session and all its messages."""
+    try:
+        async with AsyncSessionLocal() as session:
+            stmt = (
+                select(ChatSession)
+                .where(ChatSession.id == session_id)
+                .options(selectinload(ChatSession.messages))
+            )
+            result = await session.execute(stmt)
+            chat_session = result.scalar_one_or_none()
+            if not chat_session:
+                raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+
+            return {
+                "id": chat_session.id,
+                "title": chat_session.title,
+                "created_at": chat_session.created_at.isoformat() if chat_session.created_at else None,
+                "updated_at": chat_session.updated_at.isoformat() if chat_session.updated_at else None,
+                "messages": [
+                    {
+                        "id": m.id,
+                        "role": m.role,
+                        "content": m.content,
+                        "actions": m.actions,
+                        "created_at": m.created_at.isoformat() if m.created_at else None,
+                    }
+                    for m in chat_session.messages
+                ],
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch session: {e}")
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """Delete a chat session and all associated messages."""
+    try:
+        async with AsyncSessionLocal() as session:
+            stmt = select(ChatSession).where(ChatSession.id == session_id)
+            result = await session.execute(stmt)
+            chat_session = result.scalar_one_or_none()
+            if not chat_session:
+                raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+
+            await session.delete(chat_session)
+            await session.commit()
+            return {"status": "success", "message": f"Session '{session_id}' deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete session: {e}")
+
+
+@router.patch("/sessions/{session_id}")
+async def update_session(session_id: str, req: UpdateSessionRequest):
+    """Update a session's title."""
+    try:
+        async with AsyncSessionLocal() as session:
+            stmt = select(ChatSession).where(ChatSession.id == session_id)
+            result = await session.execute(stmt)
+            chat_session = result.scalar_one_or_none()
+            if not chat_session:
+                raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+
+            chat_session.title = req.title.strip()
+            chat_session.updated_at = datetime.utcnow()
+            await session.commit()
+            return {"status": "success", "title": chat_session.title}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update session: {e}")
+
+
 @router.post("/chat")
 async def smart_chat(req: AnalyzeRequest, x_gemini_api_key: str | None = Header(None)):
     """AI chat that can understand intent, provide diagnostics, and execute cluster actions."""
     user_message = req.context
+
+    # 1. Resolve or create persistent ChatSession
+    session_id = req.session_id
+    history_context = ""
+    target_session = None
+
+    try:
+        async with AsyncSessionLocal() as db_session:
+            if session_id:
+                stmt = (
+                    select(ChatSession)
+                    .where(ChatSession.id == session_id)
+                    .options(selectinload(ChatSession.messages))
+                )
+                res = await db_session.execute(stmt)
+                target_session = res.scalar_one_or_none()
+
+            if not target_session:
+                # Generate clean initial title from user query
+                initial_title = user_message[:45] + ("..." if len(user_message) > 45 else "")
+                target_session = ChatSession(title=initial_title)
+                db_session.add(target_session)
+                await db_session.commit()
+                await db_session.refresh(target_session)
+                session_id = target_session.id
+            else:
+                # Extract recent conversation turns for context memory (up to last 6 messages)
+                recent_msgs = target_session.messages[-6:]
+                if recent_msgs:
+                    history_context = "PREVIOUS CONVERSATION IN THIS SESSION:\n"
+                    for pm in recent_msgs:
+                        history_context += f"{pm.role.capitalize()}: {pm.content[:250]}\n"
+                    history_context += "\n"
+
+            # Persist incoming user message
+            user_chat_msg = ChatMessage(
+                session_id=target_session.id,
+                role="user",
+                content=user_message,
+            )
+            db_session.add(user_chat_msg)
+            await db_session.commit()
+    except Exception as db_err:
+        # Non-fatal: if DB issue occurs, chat continues
+        pass
 
     # Get current cluster context for the AI (aware of target namespace)
     cluster_context = _get_cluster_context(req)
@@ -200,7 +393,7 @@ CURRENT CLUSTER STATE:
 
     full_prompt = f"""{system_prompt}
 
-User: {user_message}"""
+{history_context}User: {user_message}"""
 
     llm_response = await _dispatch_llm(full_prompt, model=req.model, api_key=x_gemini_api_key)
     response_text = llm_response.get("response", "")
@@ -273,23 +466,79 @@ User: {user_message}"""
     # Filter out read-only queries like 'get_logs' from requiring authorization
     action_candidates = [act for act in pending_actions if act.get("action") != "get_logs"]
 
-    if action_candidates:
-        return {
-            "response": response_text,
-            "pending_actions": action_candidates,
-            "model": use_model,
-        }
+    # Persist assistant reply to database
+    try:
+        if session_id:
+            async with AsyncSessionLocal() as db_session:
+                assistant_msg = ChatMessage(
+                    session_id=session_id,
+                    role="assistant",
+                    content=response_text,
+                    actions=action_candidates if action_candidates else None,
+                )
+                db_session.add(assistant_msg)
+                
+                # Update session updated_at
+                stmt = select(ChatSession).where(ChatSession.id == session_id)
+                res = await db_session.execute(stmt)
+                sess = res.scalar_one_or_none()
+                if sess:
+                    sess.updated_at = datetime.utcnow()
 
-    return llm_response
+                await db_session.commit()
+    except Exception as db_err:
+        pass
+
+    result_payload = {
+        "response": response_text,
+        "model": use_model,
+        "session_id": session_id,
+    }
+    if action_candidates:
+        result_payload["pending_actions"] = action_candidates
+
+    return result_payload
 
 
 @router.post("/execute-action")
 async def execute_action_endpoint(req: dict):
     """Execute a confirmed cluster action. Called after user approves a pending action."""
+    action = req.get("action", "unknown")
+    namespace = req.get("namespace", "default")
+    resource_name = req.get("name") or req.get("deployment") or "cluster"
+    kind_map = {
+        "delete_pod": "Pod",
+        "scale": "Deployment",
+        "restart": "Deployment",
+        "delete_namespace": "Namespace",
+        "create": "Manifest",
+    }
+    resource_kind = kind_map.get(action, "Resource")
+
     try:
         result = _execute_action(req)
+        await record_audit_log(
+            action_type=action,
+            resource_kind=resource_kind,
+            resource_name=resource_name,
+            namespace=namespace,
+            initiated_by="ai",
+            payload=req,
+            status="success",
+            message=result.get("message"),
+        )
         return result
     except Exception as e:
+        await record_audit_log(
+            action_type=action,
+            resource_kind=resource_kind,
+            resource_name=resource_name,
+            namespace=namespace,
+            initiated_by="ai",
+            payload=req,
+            status="failed",
+            message=str(e),
+        )
         raise HTTPException(status_code=500, detail=f"Action execution failed: {e}")
 
 
