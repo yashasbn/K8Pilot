@@ -25,11 +25,21 @@ import {
   ChevronLeft,
 } from 'lucide-react'
 
+interface InvestigationStep {
+  type: string
+  content?: string
+  tool?: string
+  summary?: string
+  args?: Record<string, any>
+}
+
 interface Message {
   role: 'user' | 'assistant'
   content: string
   model?: string
   pendingActions?: PendingAction[]
+  steps?: InvestigationStep[]
+  isStreaming?: boolean
 }
 
 interface ChatSessionItem {
@@ -278,37 +288,123 @@ export default function AIChat() {
 
   const sendMessage = async () => {
     if (!input.trim()) return
-    if (isGeminiModel && !geminiApiKey) { setSettingsOpen(true); return }
+    if (isGeminiModel && !geminiApiKey) {
+      setSettingsOpen(true)
+      return
+    }
 
-    const userMsg: Message = { role: 'user', content: input }
-    setMessages(prev => [...prev, userMsg])
+    const currentPrompt = input
+    const userMsg: Message = { role: 'user', content: currentPrompt }
+    const assistantIndex = messages.length + 1
+
+    // Add user message and assistant streaming placeholder
+    const assistantPlaceholder: Message = {
+      role: 'assistant',
+      content: '',
+      model: selectedModel || 'llama3',
+      steps: [],
+      isStreaming: true,
+    }
+    setMessages((prev) => [...prev, userMsg, assistantPlaceholder])
     setInput('')
     setLoading(true)
 
     try {
-      const resp = await axios.post('/api/ai/chat', {
-        context: input,
-        prompt: 'You are K8Pilot, an AI Kubernetes operations assistant.',
-        model: selectedModel || undefined,
-        session_id: activeSessionId || undefined,
-      }, { headers: buildHeaders() })
+      const response = await fetch('/api/ai/stream', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...buildHeaders(),
+        },
+        body: JSON.stringify({
+          context: currentPrompt,
+          prompt: 'You are K8Pilot, an AI Kubernetes operations assistant.',
+          model: selectedModel || undefined,
+          session_id: activeSessionId || undefined,
+        }),
+      })
 
-      if (resp.data.session_id) {
-        setActiveSessionId(resp.data.session_id)
-        fetchSessions()
+      if (!response.ok || !response.body) {
+        throw new Error(`HTTP ${response.status}: Failed to start stream`)
       }
 
-      const assistantMsg: Message = {
-        role: 'assistant',
-        content: resp.data.response || '',
-        model: resp.data.model,
-        pendingActions: resp.data.pending_actions || undefined,
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let accumulatedText = ''
+      const collectedSteps: InvestigationStep[] = []
+      let pendingActions: PendingAction[] | undefined = undefined
+
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        let currentEvent = 'message'
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim()
+          } else if (line.startsWith('data: ')) {
+            const dataStr = line.slice(6).trim()
+            if (!dataStr) continue
+            try {
+              const data = JSON.parse(dataStr)
+              if (currentEvent === 'session' && data.session_id) {
+                setActiveSessionId(data.session_id)
+                fetchSessions()
+              } else if (currentEvent === 'step') {
+                collectedSteps.push(data)
+                setMessages((prev) =>
+                  prev.map((m, idx) =>
+                    idx === assistantIndex ? { ...m, steps: [...collectedSteps] } : m
+                  )
+                )
+              } else if (currentEvent === 'token' && data.text) {
+                accumulatedText += data.text
+                setMessages((prev) =>
+                  prev.map((m, idx) =>
+                    idx === assistantIndex
+                      ? { ...m, content: accumulatedText, steps: [...collectedSteps] }
+                      : m
+                  )
+                )
+              } else if (currentEvent === 'action') {
+                pendingActions = data
+                setMessages((prev) =>
+                  prev.map((m, idx) =>
+                    idx === assistantIndex ? { ...m, pendingActions: data } : m
+                  )
+                )
+              } else if (currentEvent === 'done') {
+                fetchSessions()
+              }
+            } catch {
+              // ignore malformed SSE line
+            }
+          }
+        }
       }
-      setMessages(prev => [...prev, assistantMsg])
+
+      setMessages((prev) =>
+        prev.map((m, idx) =>
+          idx === assistantIndex
+            ? { ...m, isStreaming: false, content: accumulatedText, pendingActions }
+            : m
+        )
+      )
     } catch (err: unknown) {
-      let errMsg = 'Error: Could not reach AI service.'
-      if (axios.isAxiosError(err) && err.response?.data?.detail) errMsg = `Error: ${err.response.data.detail}`
-      setMessages(prev => [...prev, { role: 'assistant', content: errMsg }])
+      let errMsg = 'Error: Could not reach AI streaming service.'
+      if (err instanceof Error) errMsg = `Error: ${err.message}`
+      setMessages((prev) =>
+        prev.map((m, idx) =>
+          idx === assistantIndex
+            ? { ...m, isStreaming: false, content: errMsg }
+            : m
+        )
+      )
     } finally {
       setLoading(false)
     }
@@ -777,12 +873,63 @@ export default function AIChat() {
         {messages.map((msg, i) => (
           <div key={i} className="flex flex-col gap-2">
             <div className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[70%] rounded-lg px-4 py-2 text-sm whitespace-pre-wrap ${
-                msg.role === 'user' ? 'bg-blue-600' : 'bg-gray-800 border border-gray-700'
+              <div className={`max-w-[75%] rounded-lg px-4 py-2.5 text-sm whitespace-pre-wrap ${
+                msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-800 border border-gray-700 text-gray-200'
               }`}>
-                {msg.content}
-                {msg.model && msg.role === 'assistant' && (
-                  <div className="mt-1 pt-1 border-t border-gray-700 text-xs text-gray-500 flex items-center gap-1">
+                {/* Autonomous SRE Investigation Steps Box */}
+                {msg.steps && msg.steps.length > 0 && (
+                  <div className="mb-3 p-2.5 rounded-lg bg-gray-950/80 border border-blue-500/20 text-xs space-y-1.5 shadow-inner">
+                    <div className="flex items-center gap-1.5 text-blue-400 font-semibold text-[11px] uppercase tracking-wide">
+                      <Sparkles size={12} className={msg.isStreaming ? 'animate-spin text-blue-400' : 'text-blue-400'} />
+                      <span>Autonomous SRE Investigation</span>
+                      {msg.isStreaming && <span className="text-gray-500 font-normal lowercase">(live)</span>}
+                    </div>
+                    <div className="space-y-1 pt-1 border-t border-gray-800/80">
+                      {msg.steps.map((st, sIdx) => (
+                        <div key={sIdx} className="flex items-center gap-1.5 text-gray-300 text-[11px] font-mono">
+                          {st.type === 'thought' && (
+                            <>
+                              <span className="text-purple-400 shrink-0 font-semibold">🧠</span>
+                              <span className="text-gray-400 truncate">{st.content}</span>
+                            </>
+                          )}
+                          {st.type === 'tool_call' && (
+                            <>
+                              <span className="text-amber-400 shrink-0 font-semibold">🔧</span>
+                              <span className="text-gray-300">
+                                {st.tool}({st.args ? Object.entries(st.args).map(([k, v]) => `${k}="${v}"`).join(', ') : ''})
+                              </span>
+                            </>
+                          )}
+                          {st.type === 'tool_result' && (
+                            <>
+                              <span className="text-emerald-400 shrink-0 font-semibold">✓</span>
+                              <span className="text-emerald-400/90 truncate">{st.summary}</span>
+                            </>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Content */}
+                {msg.content ? (
+                  <div>
+                    {msg.content}
+                    {msg.isStreaming && (
+                      <span className="inline-block w-2 h-4 ml-1 bg-blue-400 animate-pulse align-middle" />
+                    )}
+                  </div>
+                ) : msg.isStreaming ? (
+                  <div className="flex items-center gap-2 text-xs text-blue-400 font-mono py-1">
+                    <Loader size={14} className="animate-spin" />
+                    <span>Analyzing cluster and gathering diagnostics...</span>
+                  </div>
+                ) : null}
+
+                {msg.model && msg.role === 'assistant' && !msg.isStreaming && (
+                  <div className="mt-2 pt-1 border-t border-gray-700/80 text-[11px] text-gray-500 flex items-center gap-1">
                     {msg.model.startsWith('gemini-') ? <Sparkles size={10} /> : <Cpu size={10} />} {msg.model}
                   </div>
                 )}

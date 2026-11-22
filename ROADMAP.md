@@ -110,29 +110,26 @@ main
 
 ---
 
-### Phase 4: Autonomous SRE Agent & Token Streaming
+### Phase 4: Autonomous SRE Agent & Token Streaming (Completed ✅)
 * **Branch**: `feature/phase4-agentic-ai-streaming`
-* **Target Merge**: `main`
-* **Key Deliverables**:
+* **Target Merge**: `main` (via GitHub Pull Request)
+* **Delivered Features**:
   1. **Autonomous ReAct Agent Loop (`backend/app/core/agent.py`)**:
-     - Implement a true multi-step ReAct agent loop (`Thought` ➔ `Action/Tool` ➔ `Observation` ➔ `Synthesis`).
-     - Replaces single-turn static prompts with iterative, self-directed investigation (max 4 steps).
-     - Works seamlessly across local Ollama models (`llama3`) and Google Gemini.
-  2. **Kubernetes Agent Tools**:
-     - `get_pod_status(name, namespace)`: Exact container statuses, readiness, exit codes.
-     - `get_pod_logs(name, namespace, tail_lines, container)`: Live container logs.
-     - `get_pod_events(name, namespace)`: Warning and normal events specifically for the pod.
-     - `get_deployment_status(name, namespace)`: Replica counts, rollout conditions, selectors.
-     - `get_cluster_metrics()`: Live CPU/Memory pressure on nodes and pods.
-  3. **Agent Thought Visibility in UI**:
-     - Display intermediate tool execution steps in the chat (e.g. `🔍 Inspecting pod events...`, `📋 Reading recent logs...`).
-     - Transparent reasoning so operators can see exactly how the agent reached its diagnosis.
-  4. **Server-Sent Events (SSE) Streaming**:
-     - Stream LLM tokens in real time to the frontend for zero-latency response perception.
-       - `describe_workload(deployment, namespace)`
-     - AI investigates multi-step issues and summarizes findings with evidence before recommending action.
-  3. **1-Click "Diagnose with AI" Flow**:
-     - Add a button next to any unhealthy pod or warning event that opens AI Chat with the incident pre-populated.
+     - Real-time multi-step investigation loop (`investigate_target`): extracts target resources, determines inspection sequence, and fetches live evidence.
+     - SRE inspection tools:
+       * `tool_get_pod_status`: Pod phase, readiness, restart counts, and container termination reasons.
+       * `tool_get_pod_logs`: Tail container stdout/stderr logs.
+       * `tool_get_pod_events`: Warning and normal events specifically involving the target resource.
+       * `tool_get_deployment_status`: Desired/ready replicas and rollout conditions.
+       * `tool_get_cluster_metrics`: Real-time node and pod resource pressure.
+  2. **Server-Sent Events (SSE) Streaming (`/api/ai/stream`)**:
+     - Real-time event streaming (`session`, `step`, `token`, `action`, `done`).
+     - Live token-by-token output directly into the chat bubble for zero perception latency.
+     - Intermediate investigation transparency: shows active thoughts, tool calls, and tool results.
+     - Asynchronous streaming across both local Ollama models (`llama3`) and Google Gemini.
+     - Persistent chat history automatically saved to PostgreSQL (`ChatMessage`) upon stream completion.
+  3. **1-Click "Diagnose with AI" Flow on Dashboard**:
+     - Direct "Diagnose with AI" button on warning events in the Dashboard events feed, automatically navigating to AI Chat with the event context pre-populated.
 
 ---
 
