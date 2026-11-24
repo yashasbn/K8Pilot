@@ -1,9 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
 import axios from 'axios'
 import { useState } from 'react'
-import { Cpu, HardDrive, AlertTriangle, CheckCircle2, Clock, RefreshCw, Activity, Layers } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Cpu, HardDrive, AlertTriangle, CheckCircle2, Clock, RefreshCw, Activity, Layers, Sparkles } from 'lucide-react'
 
 export default function Dashboard() {
+  const navigate = useNavigate()
   const [eventFilter, setEventFilter] = useState<'all' | 'Warning'>('all')
 
   const { data: health, isLoading: healthLoading } = useQuery({
@@ -299,6 +301,21 @@ export default function Dashboard() {
                         <span className="text-3xs text-gray-500 font-mono">ns: {ev.namespace}</span>
                       </div>
                       <p className="text-xs text-gray-400 mt-1 leading-relaxed">{ev.message}</p>
+                      {isWarning && (
+                        <button
+                          onClick={() =>
+                            navigate('/ai', {
+                              state: {
+                                initialPrompt: `Investigate cluster event: [${ev.type}] ${ev.reason} on ${ev.involved_object?.kind}/${ev.involved_object?.name} in namespace ${ev.namespace}. Message: ${ev.message}`,
+                              },
+                            })
+                          }
+                          className="mt-2 inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/20 transition font-medium"
+                        >
+                          <Sparkles size={11} className="text-amber-400" />
+                          Diagnose with AI
+                        </button>
+                      )}
                     </div>
                   </div>
 

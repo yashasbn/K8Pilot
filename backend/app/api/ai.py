@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Header
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import httpx
 import json
@@ -13,6 +14,11 @@ from app.core.kubernetes import get_k8s_client, get_apps_client
 from app.core.database import AsyncSessionLocal
 from app.models.chat import ChatSession, ChatMessage
 from app.core.audit import record_audit_log
+from app.core.agent import (
+    investigate_target,
+    stream_ollama_tokens,
+    stream_gemini_tokens,
+)
 from kubernetes import utils
 from kubernetes.client.exceptions import ApiException
 
@@ -734,3 +740,164 @@ async def _dispatch_llm(prompt: str, model: str | None = None, api_key: str | No
             raise HTTPException(status_code=400, detail="Gemini API Key is missing. Configure it in the UI Settings first.")
         return await _call_gemini(prompt, use_model, api_key)
     return await _call_ollama(prompt, use_model)
+
+
+@router.post("/stream")
+async def stream_chat(req: AnalyzeRequest, x_gemini_api_key: str | None = Header(None)):
+    """Autonomous SRE agent that streams investigation progress and tokens via SSE."""
+    use_model = req.model or settings.ollama_model
+    is_gemini = use_model.startswith("gemini-")
+    if is_gemini and not x_gemini_api_key:
+        raise HTTPException(status_code=400, detail="Gemini API Key is missing. Configure it in Settings first.")
+
+    async def event_generator():
+        # 1. Resolve or create persistent ChatSession
+        session_id = req.session_id
+        history_context = ""
+        target_session = None
+
+        try:
+            async with AsyncSessionLocal() as db_session:
+                if session_id:
+                    stmt = (
+                        select(ChatSession)
+                        .where(ChatSession.id == session_id)
+                        .options(selectinload(ChatSession.messages))
+                    )
+                    res = await db_session.execute(stmt)
+                    target_session = res.scalar_one_or_none()
+
+                if not target_session:
+                    initial_title = req.context[:45] + ("..." if len(req.context) > 45 else "")
+                    target_session = ChatSession(title=initial_title)
+                    db_session.add(target_session)
+                    await db_session.commit()
+                    await db_session.refresh(target_session)
+                    session_id = target_session.id
+                else:
+                    recent_msgs = target_session.messages[-6:]
+                    if recent_msgs:
+                        history_context = "PREVIOUS CONVERSATION IN THIS SESSION:\n"
+                        for pm in recent_msgs:
+                            history_context += f"{pm.role.capitalize()}: {pm.content[:250]}\n"
+                        history_context += "\n"
+
+                # Persist incoming user message
+                user_chat_msg = ChatMessage(
+                    session_id=target_session.id,
+                    role="user",
+                    content=req.context,
+                )
+                db_session.add(user_chat_msg)
+                await db_session.commit()
+        except Exception:
+            pass
+
+        # Send initial session event
+        yield f"event: session\ndata: {json.dumps({'session_id': session_id})}\n\n"
+
+        # 2. Run Autonomous ReAct Investigation
+        evidence_text = ""
+        async for step in investigate_target(req.context):
+            if step["type"] == "evidence_assembled":
+                evidence_text = step.get("evidence", "")
+            else:
+                yield f"event: step\ndata: {json.dumps(step)}\n\n"
+
+        # 3. Construct prompt incorporating cluster context and investigated evidence
+        cluster_context = _get_cluster_context(req)
+        system_prompt = f"""You are K8Pilot, an expert AI Kubernetes site reliability engineer (SRE) and operations assistant.
+
+YOUR CAPABILITIES:
+1. DIAGNOSTICS & TROUBLESHOOTING:
+   When diagnosing an issue or responding to an operational request:
+   - Provide a structured technical diagnostic report in clean markdown.
+   - Breakdown:
+     * **Health Summary**: Assess if the issue is benign/informational, warning, or critical.
+     * **Log & Error Analysis**: Explain what the logs, events, or exit codes indicate.
+     * **Root Cause**: Specific underlying technical cause.
+     * **Recommended Fix / Next Steps**: Concrete steps for the operator.
+   - Do NOT output an action block when providing a diagnosis unless a specific operational action is genuinely required to fix the issue.
+
+2. CLUSTER ACTIONS:
+   When the user explicitly asks to perform an action on the cluster (or when an operational fix is necessary):
+   Respond with a JSON action block wrapped in ```action ... ``` code tags:
+   - {{"action": "delete_pod", "name": "<pod-name>", "namespace": "<ns>"}}
+   - {{"action": "delete_namespace", "name": "<namespace>"}}
+   - {{"action": "scale", "deployment": "<name>", "namespace": "<ns>", "replicas": <n>}}
+   - {{"action": "restart", "deployment": "<name>", "namespace": "<ns>"}}
+   - {{"action": "create", "manifest": "<yaml-string>", "namespace": "<ns>"}}
+
+CRITICAL RULES:
+- Base your analysis on the live investigation evidence gathered below.
+- NEVER output fake or placeholder action blocks in conversational prose.
+- If no action is needed (e.g. benign deprecation warnings), recommend no action.
+
+AUTONOMOUS SRE INVESTIGATION EVIDENCE:
+{evidence_text}
+
+CURRENT CLUSTER STATE:
+{cluster_context}
+"""
+
+        full_prompt = f"""{system_prompt}
+
+{history_context}User: {req.context}"""
+
+        # 4. Stream tokens from LLM
+        full_response = []
+        try:
+            if is_gemini:
+                async for chunk in stream_gemini_tokens(full_prompt, use_model, x_gemini_api_key):
+                    full_response.append(chunk)
+                    yield f"event: token\ndata: {json.dumps({'text': chunk})}\n\n"
+            else:
+                async for chunk in stream_ollama_tokens(full_prompt, use_model):
+                    full_response.append(chunk)
+                    yield f"event: token\ndata: {json.dumps({'text': chunk})}\n\n"
+        except Exception as err:
+            err_msg = f"\n\n[Inference Error: {err}]"
+            full_response.append(err_msg)
+            yield f"event: token\ndata: {json.dumps({'text': err_msg})}\n\n"
+
+        response_text = "".join(full_response)
+
+        # 5. Extract pending actions safely
+        pending_actions = []
+        fence_matches = list(re.finditer(r'`{2,3}(?:action|json|yaml)?\s*\n?(.*?)\n?`{2,3}', response_text, re.DOTALL))
+        for m in fence_matches:
+            if not is_example_text(response_text, m.start()):
+                extracted = extract_json_objects(m.group(1))
+                pending_actions.extend(extracted)
+
+        if not pending_actions and "```" not in response_text:
+            pending_actions = extract_json_objects(response_text)
+
+        action_candidates = [act for act in pending_actions if act.get("action") != "get_logs"]
+        if action_candidates:
+            yield f"event: action\ndata: {json.dumps(action_candidates)}\n\n"
+
+        # 6. Persist assistant reply to database
+        try:
+            if session_id:
+                async with AsyncSessionLocal() as db_session:
+                    assistant_msg = ChatMessage(
+                        session_id=session_id,
+                        role="assistant",
+                        content=response_text,
+                        actions=action_candidates if action_candidates else None,
+                    )
+                    db_session.add(assistant_msg)
+                    stmt = select(ChatSession).where(ChatSession.id == session_id)
+                    res = await db_session.execute(stmt)
+                    sess = res.scalar_one_or_none()
+                    if sess:
+                        sess.updated_at = datetime.utcnow()
+                    await db_session.commit()
+        except Exception:
+            pass
+
+        # 7. Final done event
+        yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'status': 'completed'})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
