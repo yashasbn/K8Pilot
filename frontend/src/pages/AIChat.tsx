@@ -104,6 +104,7 @@ const RECOMMENDED_MODELS: RecommendedModel[] = [
 ]
 
 const GEMINI_API_KEY_STORAGE = 'k8pilot_gemini_api_key'
+const ACTIVE_SESSION_STORAGE = 'k8pilot_active_session_id'
 
 function formatSize(bytes: number): string {
   if (bytes === 0) return ''
@@ -146,10 +147,19 @@ export default function AIChat() {
 
   const isGeminiModel = selectedModel.startsWith('gemini-')
 
-  const fetchSessions = async () => {
+  const fetchSessions = async (autoRestore = false) => {
     try {
       const resp = await axios.get('/api/ai/sessions')
-      setSessions(resp.data.sessions || [])
+      const sessList: ChatSessionItem[] = resp.data.sessions || []
+      setSessions(sessList)
+      if (autoRestore && sessList.length > 0) {
+        const savedId = localStorage.getItem(ACTIVE_SESSION_STORAGE)
+        if (savedId && sessList.some((s) => s.id === savedId)) {
+          loadSession(savedId)
+        } else if (sessList.length > 0) {
+          loadSession(sessList[0].id)
+        }
+      }
     } catch {
       console.error('Could not fetch sessions')
     }
@@ -159,6 +169,7 @@ export default function AIChat() {
     try {
       setLoading(true)
       setActiveSessionId(sessionId)
+      localStorage.setItem(ACTIVE_SESSION_STORAGE, sessionId)
       const resp = await axios.get(`/api/ai/sessions/${sessionId}`)
       const loaded: Message[] = (resp.data.messages || []).map((m: any) => ({
         role: m.role,
@@ -175,6 +186,7 @@ export default function AIChat() {
 
   const startNewChat = () => {
     setActiveSessionId(null)
+    localStorage.removeItem(ACTIVE_SESSION_STORAGE)
     setMessages([])
   }
 
@@ -239,7 +251,7 @@ export default function AIChat() {
 
   useEffect(() => {
     fetchModels()
-    fetchSessions()
+    fetchSessions(true)
     if (geminiApiKey) fetchGeminiModels(geminiApiKey)
   }, [])
 
@@ -355,6 +367,7 @@ export default function AIChat() {
               const data = JSON.parse(dataStr)
               if (currentEvent === 'session' && data.session_id) {
                 setActiveSessionId(data.session_id)
+                localStorage.setItem(ACTIVE_SESSION_STORAGE, data.session_id)
                 fetchSessions()
               } else if (currentEvent === 'step') {
                 collectedSteps.push(data)

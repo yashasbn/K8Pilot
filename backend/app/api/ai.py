@@ -5,7 +5,7 @@ import httpx
 import json
 import re
 import yaml
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import select, desc, func
 from sqlalchemy.orm import selectinload
 
@@ -311,6 +311,75 @@ async def update_session(session_id: str, req: UpdateSessionRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to update session: {e}")
+
+
+# ── Action extraction helpers ───────────────────────────────────────────────
+
+def is_example_text(full_text: str, match_pos: int) -> bool:
+    """Check if action is merely mentioned as a conversational example."""
+    lookback = full_text[max(0, match_pos - 150):match_pos].lower()
+    indicators = ["for example", "such as", "e.g.", "like this:", "here is an example", "what's your first command"]
+    return any(ind in lookback for ind in indicators)
+
+
+def extract_json_objects(text: str) -> list[dict]:
+    """Find all top-level JSON objects containing an 'action' key."""
+    results = []
+    i = 0
+    while i < len(text):
+        if text[i] == '{':
+            depth = 0
+            in_string = False
+            escape = False
+            start = i
+            for j in range(i, len(text)):
+                ch = text[j]
+                if escape:
+                    escape = False
+                    continue
+                if ch == '\\' and in_string:
+                    escape = True
+                    continue
+                if ch == '"':
+                    in_string = not in_string
+                    continue
+                if not in_string:
+                    if ch == '{':
+                        depth += 1
+                    elif ch == '}':
+                        depth -= 1
+                        if depth == 0:
+                            candidate = text[start:j+1]
+                            if not is_example_text(text, start):
+                                try:
+                                    parsed = json.loads(candidate)
+                                    if isinstance(parsed, dict) and "action" in parsed:
+                                        results.append(parsed)
+                                except json.JSONDecodeError:
+                                    pass
+                            i = j + 1
+                            break
+            else:
+                i += 1
+                continue
+        else:
+            i += 1
+    return results
+
+
+def extract_actions_from_response(response_text: str) -> list[dict]:
+    """Extract actionable cluster mutation commands while filtering out illustrative examples."""
+    pending_actions = []
+    fence_matches = list(re.finditer(r'`{2,3}(?:action|json|yaml)?\s*\n?(.*?)\n?`{2,3}', response_text, re.DOTALL))
+    for m in fence_matches:
+        if not is_example_text(response_text, m.start()):
+            extracted = extract_json_objects(m.group(1))
+            pending_actions.extend(extracted)
+
+    if not pending_actions and "```" not in response_text:
+        pending_actions = extract_json_objects(response_text)
+
+    return [act for act in pending_actions if act.get("action") != "get_logs"]
 
 
 @router.post("/chat")
@@ -863,17 +932,7 @@ CURRENT CLUSTER STATE:
         response_text = "".join(full_response)
 
         # 5. Extract pending actions safely
-        pending_actions = []
-        fence_matches = list(re.finditer(r'`{2,3}(?:action|json|yaml)?\s*\n?(.*?)\n?`{2,3}', response_text, re.DOTALL))
-        for m in fence_matches:
-            if not is_example_text(response_text, m.start()):
-                extracted = extract_json_objects(m.group(1))
-                pending_actions.extend(extracted)
-
-        if not pending_actions and "```" not in response_text:
-            pending_actions = extract_json_objects(response_text)
-
-        action_candidates = [act for act in pending_actions if act.get("action") != "get_logs"]
+        action_candidates = extract_actions_from_response(response_text)
         if action_candidates:
             yield f"event: action\ndata: {json.dumps(action_candidates)}\n\n"
 
@@ -892,7 +951,7 @@ CURRENT CLUSTER STATE:
                     res = await db_session.execute(stmt)
                     sess = res.scalar_one_or_none()
                     if sess:
-                        sess.updated_at = datetime.utcnow()
+                        sess.updated_at = datetime.now(timezone.utc)
                     await db_session.commit()
         except Exception:
             pass
