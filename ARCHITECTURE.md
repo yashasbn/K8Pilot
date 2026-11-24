@@ -280,3 +280,84 @@ flowchart TD
     style Class1 fill:#022c22,stroke:#059669,stroke-width:2px,color:#a7f3d0
     style Class2 fill:#2a0813,stroke:#e11d48,stroke-width:2px,color:#fecdd3
 ```
+
+---
+
+## 8. Automated Anomaly Detection & Self-Healing Architecture
+
+```mermaid
+flowchart TD
+    classDef monitorStyle fill:#1e1b4b,stroke:#818cf8,stroke-width:2px,color:#e0e7ff;
+    classDef detectStyle fill:#4c0519,stroke:#f43f5e,stroke-width:2px,color:#ffe4e6;
+    classDef dbStyle fill:#064e3b,stroke:#34d399,stroke-width:2px,color:#ecfdf5;
+    classDef healStyle fill:#581c87,stroke:#c084fc,stroke-width:2px,color:#faf5ff;
+    classDef k8sStyle fill:#0c4a6e,stroke:#38bdf8,stroke-width:2px,color:#f0f9ff;
+    classDef auditStyle fill:#78350f,stroke:#fbbf24,stroke-width:2px,color:#fffbeb;
+
+    subgraph MonitorLoop["⏱️ Autonomous Background Watcher"]
+        Ticker["Periodic Scan / Event Tick<br/>(30s lifespan task)"]:::monitorStyle
+        K8sScan["Kubernetes CoreV1 API<br/>(List pods & container statuses)"]:::k8sStyle
+    end
+
+    subgraph Classifier["🔍 Anomaly Detection & Classification"]
+        CrashCheck{"Failure Condition?"}:::detectStyle
+        CrashLoop["CrashLoopBackOff"]:::detectStyle
+        OOM["OOMKilled (Exit 137)"]:::detectStyle
+        ImgErr["ImagePullBackOff"]:::detectStyle
+        Evicted["Pod Evicted / Failed"]:::detectStyle
+        Restarts["Frequent Restarts (>=3)"]:::detectStyle
+    end
+
+    subgraph IncidentDB["💾 Incident Persistence & State"]
+        Deduplicator{"Already Tracked?"}:::dbStyle
+        UpdateIncident["Update last_seen & restart count"]:::dbStyle
+        CreateIncident["Persist new ClusterIncident (open)"]:::dbStyle
+        IncTable[("PostgreSQL: cluster_incidents")]:::dbStyle
+    end
+
+    subgraph HealingEngine["⚡ Self-Healing Remediation"]
+        ModeCheck{"Auto-Heal Enabled or<br/>1-Click User Approval?"}:::healStyle
+        ActionPicker{"Target Controller Kind?"}:::healStyle
+        RolloutDep["Patch Deployment<br/>(restartedAt rollout)"]:::k8sStyle
+        RolloutSTS["Patch StatefulSet<br/>(restartedAt rollout)"]:::k8sStyle
+        RecreatePod["Delete Pod<br/>(trigger fresh recreate)"]:::k8sStyle
+        AuditTrail["Record AuditLog<br/>(action: auto_heal)"]:::auditStyle
+        ResolveInc["Mark Incident: resolved / healed"]:::dbStyle
+    end
+
+    Ticker --> K8sScan
+    K8sScan --> CrashCheck
+    CrashCheck -->|Waiting reason| CrashLoop
+    CrashCheck -->|Terminated reason| OOM
+    CrashCheck -->|Waiting reason| ImgErr
+    CrashCheck -->|Phase Failed| Evicted
+    CrashCheck -->|Restart threshold| Restarts
+
+    CrashLoop --> Deduplicator
+    OOM --> Deduplicator
+    ImgErr --> Deduplicator
+    Evicted --> Deduplicator
+    Restarts --> Deduplicator
+
+    Deduplicator -->|Yes| UpdateIncident
+    Deduplicator -->|No| CreateIncident
+    UpdateIncident --> IncTable
+    CreateIncident --> IncTable
+
+    IncTable --> ModeCheck
+    ModeCheck -->|Execute| ActionPicker
+    ActionPicker -->|Deployment| RolloutDep
+    ActionPicker -->|StatefulSet| RolloutSTS
+    ActionPicker -->|Pod| RecreatePod
+
+    RolloutDep --> AuditTrail
+    RolloutSTS --> AuditTrail
+    RecreatePod --> AuditTrail
+    AuditTrail --> ResolveInc
+    ResolveInc --> IncTable
+
+    style MonitorLoop fill:#0f172a,stroke:#3b82f6,stroke-width:1.5px,color:#93c5fd
+    style Classifier fill:#2a0813,stroke:#ef4444,stroke-width:1.5px,color:#fca5a5
+    style IncidentDB fill:#022c22,stroke:#10b981,stroke-width:1.5px,color:#6ee7b7
+    style HealingEngine fill:#2e1065,stroke:#a855f7,stroke-width:1.5px,color:#d8b4fe
+```

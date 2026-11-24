@@ -2,16 +2,19 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import cluster, metrics, ai, health, actions, audit
+from app.api import cluster, metrics, ai, health, actions, audit, incidents
 from app.core.config import settings
 from app.core.database import init_db
+from app.core.monitor import start_monitor, stop_monitor
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Initialize database tables on startup
     await init_db()
+    start_monitor()
     yield
+    stop_monitor()
 
 
 app = FastAPI(
@@ -35,6 +38,7 @@ app.include_router(metrics.router, prefix="/api")
 app.include_router(ai.router, prefix="/api")
 app.include_router(actions.router, prefix="/api")
 app.include_router(audit.router, prefix="/api")
+app.include_router(incidents.router, prefix="/api")
 
 
 @app.get("/")

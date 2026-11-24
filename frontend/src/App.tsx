@@ -5,6 +5,7 @@ import Pods from './pages/Pods'
 import Workloads from './pages/Workloads'
 import Networking from './pages/Networking'
 import AuditLogs from './pages/AuditLogs'
+import Incidents from './pages/Incidents'
 import AIChat from './pages/AIChat'
 
 function App() {
@@ -16,6 +17,7 @@ function App() {
           <Route path="pods" element={<Pods />} />
           <Route path="workloads" element={<Workloads />} />
           <Route path="networking" element={<Networking />} />
+          <Route path="incidents" element={<Incidents />} />
           <Route path="audit" element={<AuditLogs />} />
           <Route path="ai" element={<AIChat />} />
         </Route>

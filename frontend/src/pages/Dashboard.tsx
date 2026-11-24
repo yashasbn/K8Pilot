@@ -2,11 +2,17 @@ import { useQuery } from '@tanstack/react-query'
 import axios from 'axios'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Cpu, HardDrive, AlertTriangle, CheckCircle2, Clock, RefreshCw, Activity, Layers, Sparkles } from 'lucide-react'
+import { Cpu, HardDrive, AlertTriangle, CheckCircle2, Clock, RefreshCw, Activity, Layers, Sparkles, AlertOctagon, ArrowRight } from 'lucide-react'
 
 export default function Dashboard() {
   const navigate = useNavigate()
   const [eventFilter, setEventFilter] = useState<'all' | 'Warning'>('all')
+
+  const { data: incidentStats } = useQuery({
+    queryKey: ['incident-stats-dash'],
+    queryFn: () => axios.get('/api/incidents/stats').then(r => r.data),
+    refetchInterval: 10000,
+  })
 
   const { data: health, isLoading: healthLoading } = useQuery({
     queryKey: ['health'],
@@ -54,6 +60,39 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+
+      {/* Incident Alert Banner */}
+      {(incidentStats?.open ?? 0) > 0 && (
+        <div className="p-3.5 bg-red-950/40 border border-red-500/30 rounded-xl flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-red-500/20 text-red-400 flex items-center justify-center shrink-0">
+              <AlertOctagon size={18} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-red-300">
+                  {incidentStats.open} Cluster Incident{incidentStats.open > 1 ? 's' : ''} Detected
+                </span>
+                {incidentStats.critical > 0 && (
+                  <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-red-500/20 text-red-300 border border-red-500/30">
+                    {incidentStats.critical} critical
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-gray-400 mt-0.5">
+                Automated anomaly detector flagged workload failures in the cluster.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => navigate('/incidents')}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-medium transition shadow-sm shrink-0"
+          >
+            <span>Incident Command Center</span>
+            <ArrowRight size={13} />
+          </button>
+        </div>
+      )}
 
       {/* Row 1: Platform Component Status */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">

@@ -133,17 +133,24 @@ main
 
 ---
 
-### Phase 5: Automated Anomaly Detection & Self-Healing
+### Phase 5: Automated Anomaly Detection & Self-Healing (Completed ✅)
 * **Branch**: `feature/phase5-auto-healing-monitor`
-* **Target Merge**: `main`
-* **Key Deliverables**:
-  1. **Background Health Watcher**:
-     - Async background loop monitoring Kubernetes watch streams for pod failures (`OOMKilled`, `CrashLoopBackOff`, unhealthy probes).
-  2. **Incident Inbox & Alerting**:
-     - Generate incident cards on the Dashboard when anomalies occur.
-     - Pre-generate an AI diagnostic explanation and proposed remediation manifest.
-  3. **Human-in-the-Loop Auto-Healing**:
-     - 1-click "Approve & Apply Fix" button with dry-run verification before execution.
+* **Target Merge**: `main` (via GitHub Pull Request)
+* **Delivered Features**:
+  1. **Continuous Anomaly Detection Monitor (`backend/app/core/monitor.py`)**:
+     - Background async worker integrated into FastAPI lifespan with configurable polling interval.
+     - Detects critical conditions: `CrashLoopBackOff`, `OOMKilled` (exit code 137), `ImagePullBackOff`, `ErrImagePull`, `Evicted` pods, and rapid high restart counts.
+     - Resolves top-level owner references (Deployment, StatefulSet, DaemonSet, Job, or standalone Pod).
+     - Intelligent deduplication: prevents database spam by tracking and updating existing open incidents with last-seen timestamps and state changes.
+  2. **Self-Healing Remediation Engine (`backend/app/api/incidents.py`)**:
+     - Automated and 1-click self-healing: supports rolling restarts for Deployments, StatefulSets, DaemonSets, and direct Pod recreation.
+     - Autonomous Auto-Heal Agent mode: toggleable dynamic setting to automatically remediate known recoverable failures immediately upon detection.
+     - Integrated mutation audit logging: records all self-healing actions into PostgreSQL `AuditLog` with before/after state and initiator tags.
+  3. **Incident Command Center UI (`/incidents`)**:
+     - Dedicated monitoring cockpit with KPI cards: Open Incidents, Critical Issues, Warnings, and Auto-Healed/Resolved.
+     - Live sidebar alert badge showing active incident counts in real time.
+     - Dashboard integration: prominent alert banner notifying operators of active incidents with 1-click navigation.
+     - Full interactive controls: instant "Scan Cluster" trigger, Auto-Heal toggle, 1-click "Auto-Heal" execution, "Diagnose with AI" integration, and dismissal flow.
 
 ---
 

@@ -1,14 +1,23 @@
 import { Outlet, Link, useLocation } from 'react-router-dom'
-import { Activity, Box, Layers, Network, MessageSquare, ShieldCheck } from 'lucide-react'
+import { Activity, Box, Layers, Network, MessageSquare, ShieldCheck, AlertOctagon } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import axios from 'axios'
 
 export default function Layout() {
   const location = useLocation()
+
+  const { data: incidentStats } = useQuery({
+    queryKey: ['incident-stats-badge'],
+    queryFn: () => axios.get('/api/incidents/stats').then((r) => r.data),
+    refetchInterval: 15000,
+  })
 
   const navItems = [
     { to: '/', label: 'Dashboard', icon: Activity },
     { to: '/pods', label: 'Pods', icon: Box },
     { to: '/workloads', label: 'Workloads', icon: Layers },
     { to: '/networking', label: 'Networking', icon: Network },
+    { to: '/incidents', label: 'Incidents', icon: AlertOctagon, badge: incidentStats?.open },
     { to: '/audit', label: 'Audit Trail', icon: ShieldCheck },
     { to: '/ai', label: 'AI Assistant', icon: MessageSquare },
   ]
@@ -32,6 +41,7 @@ export default function Layout() {
             {navItems.map((item) => {
               const Icon = item.icon
               const isActive = location.pathname === item.to
+              const hasBadge = typeof item.badge === 'number' && item.badge > 0
               return (
                 <Link
                   key={item.to}
@@ -43,7 +53,12 @@ export default function Layout() {
                   }`}
                 >
                   <Icon size={17} className={isActive ? 'text-blue-400' : 'text-gray-400'} />
-                  {item.label}
+                  <span className="flex-1">{item.label}</span>
+                  {hasBadge && (
+                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-red-500/20 text-red-400 border border-red-500/30 animate-pulse">
+                      {item.badge}
+                    </span>
+                  )}
                 </Link>
               )
             })}
