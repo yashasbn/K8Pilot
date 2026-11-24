@@ -900,4 +900,12 @@ CURRENT CLUSTER STATE:
         # 7. Final done event
         yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'status': 'completed'})}\n\n"
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

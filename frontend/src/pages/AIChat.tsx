@@ -335,7 +335,8 @@ export default function AIChat() {
       const collectedSteps: InvestigationStep[] = []
       let pendingActions: PendingAction[] | undefined = undefined
 
-      while (true) {
+      let streamEnded = false
+      while (!streamEnded) {
         const { value, done } = await reader.read()
         if (done) break
         buffer += decoder.decode(value, { stream: true })
@@ -379,19 +380,29 @@ export default function AIChat() {
                   )
                 )
               } else if (currentEvent === 'done') {
+                streamEnded = true
                 fetchSessions()
+                break
               }
             } catch {
               // ignore malformed SSE line
             }
           }
         }
+        if (streamEnded) {
+          try {
+            await reader.cancel()
+          } catch {
+            // ignore
+          }
+          break
+        }
       }
 
       setMessages((prev) =>
         prev.map((m, idx) =>
           idx === assistantIndex
-            ? { ...m, isStreaming: false, content: accumulatedText, pendingActions }
+            ? { ...m, isStreaming: false, content: accumulatedText, steps: [...collectedSteps], pendingActions }
             : m
         )
       )
@@ -1013,10 +1024,10 @@ export default function AIChat() {
             )}
           </div>
         ))}
-        {loading && (
+        {loading && messages.length === 0 && (
           <div className="flex justify-start">
             <div className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm text-gray-400 flex items-center gap-2">
-              <Loader size={14} className="animate-spin" /> Thinking...
+              <Loader size={14} className="animate-spin" /> Loading session...
             </div>
           </div>
         )}
