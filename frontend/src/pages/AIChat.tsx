@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import {
   Send,
@@ -144,6 +144,7 @@ export default function AIChat() {
   const settingsRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const location = useLocation()
+  const navigate = useNavigate()
 
   const isGeminiModel = selectedModel.startsWith('gemini-')
 
@@ -205,10 +206,13 @@ export default function AIChat() {
   }
 
   useEffect(() => {
-    if (location.state && (location.state as any).initialPrompt) {
-      setInput((location.state as any).initialPrompt)
+    const state = location.state as { initialPrompt?: string } | null
+    if (state?.initialPrompt) {
+      setInput(state.initialPrompt)
+      // Clear location state immediately after consuming so it does not persist or restore on re-render
+      navigate(location.pathname, { replace: true, state: null })
     }
-  }, [location.state])
+  }, [location.state, location.pathname, navigate])
 
   const fetchModels = async () => {
     try {
@@ -305,7 +309,7 @@ export default function AIChat() {
       return
     }
 
-    const currentPrompt = input
+    const currentPrompt = input.trim()
     const userMsg: Message = { role: 'user', content: currentPrompt }
     const assistantIndex = messages.length + 1
 
@@ -319,6 +323,9 @@ export default function AIChat() {
     }
     setMessages((prev) => [...prev, userMsg, assistantPlaceholder])
     setInput('')
+    if (location.state) {
+      navigate(location.pathname, { replace: true, state: null })
+    }
     setLoading(true)
 
     try {
@@ -1054,7 +1061,15 @@ export default function AIChat() {
           id="chat-input"
           value={input}
           onChange={e => setInput(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && sendMessage()}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault()
+              sendMessage()
+            }
+          }}
+          autoComplete="off"
+          autoCorrect="off"
+          spellCheck={false}
           placeholder={isGeminiModel ? `Ask K8Pilot (via ${selectedModel})...` : 'Ask about your cluster...'}
           className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-blue-500"
         />
